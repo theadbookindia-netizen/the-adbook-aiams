@@ -1,6 +1,3 @@
-import streamlit as st
-st.write("✅ AIAMS v9.0 is running")
-st.stop()
 
 import streamlit as st
 
