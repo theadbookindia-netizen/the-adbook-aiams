@@ -1,3 +1,40 @@
+import os
+import pandas as pd
+from sqlalchemy import create_engine, text
+
+@st.cache_resource
+def get_engine():
+    db_url = os.environ.get("DATABASE_URL", "")
+    if not db_url:
+        st.error("DATABASE_URL not found. Add it in Streamlit Cloud → Settings → Secrets.")
+        st.stop()
+    return create_engine(db_url, pool_pre_ping=True)
+
+engine = get_engine()
+
+def exec_sql(sql, params=None):
+    with engine.begin() as conn:
+        conn.execute(text(sql), params or {})
+
+def qdf(sql, params=None):
+    with engine.connect() as conn:
+        return pd.read_sql(text(sql), conn, params=params or {})
+
+# Create a simple table (example: installation leads)
+exec_sql("""
+CREATE TABLE IF NOT EXISTS inst_leads (
+  lead_id TEXT PRIMARY KEY,
+  district TEXT,
+  city TEXT,
+  property_name TEXT,
+  contact_person TEXT,
+  mobile TEXT,
+  email TEXT,
+  status TEXT DEFAULT 'New',
+  assigned_to TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+)
+""")
 
 import streamlit as st
 
