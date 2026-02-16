@@ -3,7 +3,11 @@ import streamlit as st
 
 st.set_page_config(page_title="AIAMS v9.0", layout="wide")
 
-st.image("assets/logo.png", width=180)
+import os
+if os.path.exists("assets/logo.png"):
+    st.image("assets/logo.png", width=180)
+else:
+    st.markdown("### The Adbook AIAMS v9.0")
 st.title("The Adbook AIAMS v9.0")
 
 st.caption("Dual Module: Installation & Advertisement (Rebuild)")
