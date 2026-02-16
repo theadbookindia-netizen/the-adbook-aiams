@@ -4,6 +4,9 @@ import streamlit as st
 st.set_page_config(page_title="AIAMS v9.0", layout="wide")
 
 st.title("The Adbook AIAMS v9.0")
+st.image("assets/logo.png", width=180)
+st.title("The Adbook AIAMS v9.0")
+
 st.caption("Dual Module: Installation & Advertisement (Rebuild)")
 
 menu = st.sidebar.radio("Navigation", [
