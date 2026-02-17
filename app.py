@@ -90,7 +90,17 @@ def migrate():
       is_enabled INTEGER NOT NULL DEFAULT 1
     )
     """)
+def test_db():
+    try:
+        with engine().connect() as conn:
+            conn.execute(text("SELECT 1"))
+        st.success("✅ Database connected successfully.")
+    except Exception as e:
+        st.error("❌ Database connection failed. Check Secrets DATABASE_URL + Supabase status.")
+        st.exception(e)   # shows real reason in logs
+        st.stop()
 
+test_db()
 migrate()
 bootstrap_admin()
 
