@@ -24,6 +24,10 @@ except Exception:
     st.error("PDF feature is temporarily disabled (cloud dependency issue).")
     st.stop()
 
+
+
+
+
 def html_to_pdf_bytes(html):
     out = io.BytesIO()
     pisa.CreatePDF(src=html, dest=out)
