@@ -6,22 +6,17 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
 
-# ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="The Adbook AIAMS v9.0", layout="wide")
 
-st.title("The Adbook AIAMS v9.0")
-st.caption("Cloud DB + Dual Modules + RBAC")
-
-# ---------------- DATABASE ENGINE (SUPABASE SAFE) ----------------
+# ---------- DB ENGINE ----------
 @st.cache_resource(show_spinner=False)
 def engine():
     db_url = (os.environ.get("DATABASE_URL") or "").strip()
-
     if not db_url:
-        st.error("DATABASE_URL missing in Secrets.")
+        st.error("❌ DATABASE_URL missing in Streamlit Secrets.")
         st.stop()
 
-    # Force psycopg v3
+    # Force psycopg v3 driver for Supabase
     if db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
@@ -29,36 +24,42 @@ def engine():
     if "sslmode=" not in db_url:
         db_url += ("&" if "?" in db_url else "?") + "sslmode=require"
 
-    return create_engine(
-        db_url,
-        pool_pre_ping=True,
-        pool_size=3,
-        max_overflow=5,
-    )
-# ---------------- PASSWORD HASH ----------------
-def pbkdf2_hash(password: str, salt: str | None = None):
-    salt = salt or uuid.uuid4().hex
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000)
-    return f"pbkdf2_sha256${salt}${base64.b64encode(dk).decode()}"
+    return create_engine(db_url, pool_pre_ping=True)
 
-def pbkdf2_verify(password, stored):
+def exec_sql(sql: str, params: dict | None = None):
+    with engine().begin() as conn:
+        conn.execute(text(sql), params or {})
+
+def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
+    with engine().connect() as conn:
+        return pd.read_sql(text(sql), conn, params=params or {})
+
+# ---------- PASSWORD HASH ----------
+def pbkdf2_hash(password: str, salt: str | None = None, iterations: int = 120_000) -> str:
+    salt = salt or uuid.uuid4().hex
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
+    return f"pbkdf2_sha256${iterations}${salt}${base64.b64encode(dk).decode('utf-8')}"
+
+def pbkdf2_verify(password: str, stored: str) -> bool:
     try:
-        alg, salt, b64hash = stored.split("$", 2)
+        alg, iters, salt, b64hash = stored.split("$", 3)
         if alg != "pbkdf2_sha256":
             return False
-        return pbkdf2_hash(password, salt).split("$", 2)[2] == b64hash
-    except:
+        iters = int(iters)
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iters)
+        return base64.b64encode(dk).decode("utf-8") == b64hash
+    except Exception:
         return False
 
-# ---------------- MIGRATIONS ----------------
+# ---------- MIGRATIONS ----------
 def migrate():
     exec_sql("""
     CREATE TABLE IF NOT EXISTS users(
       username TEXT PRIMARY KEY,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL,
-      section_scope TEXT DEFAULT '*',
-      is_active INTEGER DEFAULT 1,
+      section_scope TEXT NOT NULL DEFAULT '*',
+      is_active INTEGER NOT NULL DEFAULT 1,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       last_login_at TIMESTAMP
@@ -70,26 +71,25 @@ def migrate():
       id TEXT PRIMARY KEY,
       role TEXT NOT NULL,
       section TEXT NOT NULL,
-      can_view INTEGER DEFAULT 1,
-      can_add INTEGER DEFAULT 0,
-      can_edit INTEGER DEFAULT 0,
-      can_delete INTEGER DEFAULT 0,
-      can_export INTEGER DEFAULT 0
+      can_view INTEGER NOT NULL DEFAULT 1,
+      can_add INTEGER NOT NULL DEFAULT 0,
+      can_edit INTEGER NOT NULL DEFAULT 0,
+      can_delete INTEGER NOT NULL DEFAULT 0,
+      can_export INTEGER NOT NULL DEFAULT 0
     )
     """)
 
-# ---------------- ADMIN BOOTSTRAP ----------------
-def bootstrap_admin():
-    admin_u = os.environ.get("ADMIN_USERNAME", "admin")
-    admin_p = os.environ.get("ADMIN_PASSWORD", "admin@123")
-
-    df = qdf("SELECT username FROM users WHERE username=:u", {"u": admin_u})
-
-    if len(df) == 0:
-        exec_sql("""
-        INSERT INTO users(username,password_hash,role,section_scope,is_active)
-        VALUES(:u,:p,'Super Admin','*',1)
-        """, {"u": admin_u, "p": pbkdf2_hash(admin_p)})
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS lead_assignment_rules(
+      rule_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      district TEXT NOT NULL,
+      city TEXT NOT NULL,
+      assignees_json TEXT NOT NULL,
+      last_index INTEGER NOT NULL DEFAULT -1,
+      is_enabled INTEGER NOT NULL DEFAULT 1
+    )
+    """)
 
 migrate()
 bootstrap_admin()
