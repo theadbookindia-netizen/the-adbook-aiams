@@ -1,3 +1,8 @@
+try:
+    from xhtml2pdf import pisa
+    XHTML2PDF_AVAILABLE = True
+except Exception:
+    XHTML2PDF_AVAILABLE = False
 import os
 import re
 import io
