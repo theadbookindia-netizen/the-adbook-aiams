@@ -20,10 +20,10 @@ try:
     from xhtml2pdf import pisa
     XHTML2PDF_AVAILABLE = True
 except Exception:
-    XHTML2PDF_AVAILABLE = False
-    if not XHTML2PDF_AVAILABLE:
+   if not XHTML2PDF_AVAILABLE:
     st.error("PDF feature is temporarily disabled (cloud dependency issue).")
     st.stop()
+
 def html_to_pdf_bytes(html):
     out = io.BytesIO()
     pisa.CreatePDF(src=html, dest=out)
