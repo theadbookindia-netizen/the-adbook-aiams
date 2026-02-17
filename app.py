@@ -177,6 +177,36 @@ def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
     with db_engine().connect() as conn:
         return pd.read_sql(text(sql), conn, params=params or {})
 
+from sqlalchemy.exc import OperationalError
+
+@st.cache_resource(show_spinner=False)
+def db_engine():
+    db_url = get_database_url()
+    if not db_url:
+        st.error("DATABASE_URL not found in Streamlit Secrets.")
+        st.stop()
+
+    try:
+        eng = create_engine(db_url, pool_pre_ping=True)
+        # Test connection
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return eng
+
+    except OperationalError as e:
+        st.error("Database connection failed. Open Manage App → Logs for the exact message.")
+        # Show a short hint (does NOT print your password)
+        msg = str(e).lower()
+        if "password" in msg:
+            st.warning("Looks like username/password is wrong OR password has special characters (needs URL-encoding).")
+        elif "timeout" in msg:
+            st.warning("Looks like timeout. Use Supabase Connection Pooler (Transaction/Session) URL.")
+        elif "ssl" in msg:
+            st.warning("Looks like SSL issue. Ensure ?sslmode=require is in DATABASE_URL.")
+        else:
+            st.info("Common fix: use Supabase Pooler connection string.")
+        st.stop()
+
 
 # =============================================================================
 # DB MIGRATIONS
