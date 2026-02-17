@@ -1,8 +1,3 @@
-try:
-    
-    XHTML2PDF_AVAILABLE = True
-except Exception:
-    XHTML2PDF_AVAILABLE = False
 import os
 import re
 import io
@@ -15,10 +10,6 @@ from urllib.parse import quote_plus
 import numpy as np
 import pandas as pd
 import streamlit as st
-
-try:
-    from xhtml2pdf import pisa
-    XHTML2PDF_AVAILABLE = True
 except Exception:
  
 def html_to_pdf_bytes(html):
