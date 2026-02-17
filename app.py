@@ -12,42 +12,25 @@ st.set_page_config(page_title="The Adbook AIAMS v9.0", layout="wide")
 @st.cache_resource(show_spinner=False)
 def engine():
     db_url = (os.environ.get("DATABASE_URL") or "").strip()
-
     if not db_url:
         st.error("❌ DATABASE_URL missing in Secrets.")
-        st.stop()
-
-    if "@" not in db_url:
-        st.error("❌ DATABASE_URL looks invalid (missing @). Check Secrets.")
         st.stop()
 
     # Force psycopg v3 driver
     if db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
-    # Force SSL
+    # Ensure SSL
     if "sslmode=" not in db_url:
         db_url += ("&" if "?" in db_url else "?") + "sslmode=require"
 
-    return create_engine(db_url, pool_pre_ping=True)
-
-# ---------- PASSWORD HASH ----------
-def pbkdf2_hash(password: str, salt: str | None = None, iterations: int = 120_000) -> str:
-    salt = salt or uuid.uuid4().hex
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
-    return f"pbkdf2_sha256${iterations}${salt}${base64.b64encode(dk).decode('utf-8')}"
-
-def pbkdf2_verify(password: str, stored: str) -> bool:
-    try:
-        alg, iters, salt, b64hash = stored.split("$", 3)
-        if alg != "pbkdf2_sha256":
-            return False
-        iters = int(iters)
-        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iters)
-        return base64.b64encode(dk).decode("utf-8") == b64hash
-    except Exception:
-        return False
-
+    return create_engine(
+        db_url,
+        pool_pre_ping=True,
+        pool_size=2,
+        max_overflow=3,
+        pool_recycle=180,
+    )
 # ---------- MIGRATIONS ----------
 def migrate():
     exec_sql("""
