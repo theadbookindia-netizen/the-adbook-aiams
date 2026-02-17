@@ -1125,4 +1125,149 @@ elif PAGE == "Proposals":
                                mime="application/pdf", use_container_width=True)
 
     else:
-        st
+        st.info("Ads proposal is included in full build; this starter keeps Ads minimal.")
+
+    st.markdown("---")
+    hist = qdf("SELECT section, proposal_no, property_id, advertiser_id, pdf_filename, created_by, created_at, status FROM proposals_v8 ORDER BY created_at DESC LIMIT 200")
+    st.dataframe(hist, use_container_width=True, height=420)
+
+elif PAGE == "WhatsApp":
+    page_title("💬 WhatsApp Campaigns", "Click-to-chat + logs + hourly limit.")
+    settings = get_company_settings()
+    limit_per_hour = int(settings.get("whatsapp_limit_per_hour") or 50)
+    ok_rate = whatsapp_rate_ok(USER, limit_per_hour)
+    if not ok_rate:
+        st.warning("You reached the WhatsApp limit in the last hour.")
+
+    msg_tpl = st.text_area(
+        "Message template",
+        value="Hello {contact_person}, this is The Adbook Outdoor. We’d like to discuss {section} opportunity for {property_name} in {city}, {district}.",
+        height=90,
+    )
+    df = leads_df.drop_duplicates("__hash").copy()
+    df = df.head(200)
+    st.write("Preview (first 200 leads)")
+    st.dataframe(df[["District","City","Property Name","Promoter / Developer Name","Promoter Mobile Number","status","assigned_to"]], use_container_width=True, height=380)
+
+    st.markdown("### Send to one lead")
+    df["display"] = df["__hash"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
+    sel = st.selectbox("Select lead", df["display"].tolist())
+    rev = {v:k for k,v in disp_map.items()}
+    pid = str(rev.get(sel))
+    r = df[df["__hash"].astype("string")==pid].iloc[0].to_dict()
+
+    phone = r.get("Promoter Mobile Number","")
+    contact = r.get("Promoter / Developer Name","") or "Sir/Madam"
+    msg = msg_tpl.format(
+        section=SECTION,
+        property_name=r.get("Property Name",""),
+        city=r.get("City",""),
+        district=r.get("District",""),
+        contact_person=contact,
+    )
+
+    st.link_button("Open WhatsApp", whatsapp_url(phone, msg), use_container_width=True,
+                   disabled=(not ok_rate) or (not bool(normalize_mobile(phone))))
+
+    if st.button("Mark Sent ✅", type="primary"):
+        exec_sql("INSERT INTO whatsapp_logs_v8(log_id,campaign_id,lead_hash,username,action_status) VALUES(:id,'manual',:h,:u,'Sent')",
+                 {"id": str(uuid.uuid4()), "h": pid, "u": USER})
+        audit(USER, "WA_SENT", pid_to_code.get(pid,pid[:6]))
+        st.success("Logged.")
+        st.rerun()
+
+elif PAGE == "Reports":
+    page_title("📊 Reports", "Basic report from updates.")
+    upd = qdf("SELECT * FROM lead_updates_v8 WHERE section=:s ORDER BY last_updated DESC LIMIT 2000", {"s": SECTION})
+    st.dataframe(upd, use_container_width=True, height=520)
+
+elif PAGE == "Admin Panel":
+    if ROLE != ROLE_SUPERADMIN:
+        st.error("Not allowed.")
+        st.stop()
+
+    page_title("⚙ Admin Panel", "Create users, reset passwords, company settings.")
+    tabs = st.tabs(["Users", "Company Settings", "Audit Logs"])
+
+    with tabs[0]:
+        users = qdf("SELECT username, role, section_scope, is_active, last_login_at, created_at FROM users ORDER BY created_at DESC")
+        st.dataframe(users, use_container_width=True, height=260)
+
+        st.markdown("### Create/Update user")
+        with st.form("create_user"):
+            u = st.text_input("Username *")
+            role = st.selectbox("Role", list(ROLE_LABEL.keys()))
+            scope = st.selectbox("Scope", [SCOPE_BOTH, SECTION_INSTALL, SECTION_ADS])
+            pwd = st.text_input("Temporary password *", type="password")
+            ok = st.form_submit_button("Save user", type="primary")
+        if ok:
+            if not u.strip() or not pwd:
+                st.error("Username and password required.")
+            else:
+                exec_sql("""
+                INSERT INTO users(username,password_hash,role,section_scope,is_active)
+                VALUES(:u,:p,:r,:s,1)
+                ON CONFLICT(username) DO UPDATE SET
+                  password_hash=EXCLUDED.password_hash,
+                  role=EXCLUDED.role,
+                  section_scope=EXCLUDED.section_scope,
+                  is_active=1,
+                  updated_at=NOW()
+                """, {"u": u.strip(), "p": pbkdf2_hash(pwd), "r": role, "s": scope})
+                audit(USER, "CREATE_USER", f"{u.strip()} role={role} scope={scope}")
+                st.success("Saved.")
+                st.rerun()
+
+        st.markdown("### Disable user")
+        if len(users):
+            sel = st.selectbox("Select user", users["username"].astype("string").tolist())
+            if st.button("Disable", type="primary"):
+                exec_sql("UPDATE users SET is_active=0, updated_at=NOW() WHERE username=:u", {"u": sel})
+                audit(USER, "DISABLE_USER", sel)
+                st.success("Disabled.")
+                st.rerun()
+
+    with tabs[1]:
+        st.markdown("### Company Settings")
+        settings = get_company_settings()
+        gst = st.text_input("GST", value=settings.get("gst_no",""))
+        bank = st.text_area("Bank details (shown in proposal)", value=settings.get("bank_details",""), height=120)
+        limit = st.number_input("WhatsApp limit per hour", min_value=5, max_value=500, value=int(settings.get("whatsapp_limit_per_hour") or 50))
+        if st.button("Save settings", type="primary"):
+            upsert_company_settings(gst, bank, int(limit))
+            audit(USER, "COMPANY_SETTINGS_SAVE", f"gst={gst} limit={limit}")
+            st.success("Saved.")
+            st.rerun()
+
+        st.markdown("---")
+        st.markdown("### Signature upload (per user)")
+        users_df = qdf("SELECT username FROM users ORDER BY username")
+        sel = st.selectbox("User", users_df["username"].astype("string").tolist(), key="sig_user")
+        prof = get_user_profile(sel)
+        file = st.file_uploader("Signature file (png/jpg)", type=["png","jpg","jpeg"])
+        if file and st.button("Upload signature", type="primary"):
+            ext = file.name.split(".")[-1].lower()
+            fname = f"sig_{sel}_{uuid.uuid4().hex}.{ext}"
+            path = os.path.join(UPLOAD_SIG, fname)
+            with open(path, "wb") as fp:
+                fp.write(file.getbuffer())
+            update_user_signature(sel, fname)
+            audit(USER, "SIGNATURE_UPLOAD", sel)
+            st.success("Uploaded.")
+            st.rerun()
+        st.write("Current:", prof.get("signature_filename","(none)"))
+
+    with tabs[2]:
+        logs = qdf("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 500")
+        st.dataframe(logs, use_container_width=True, height=520)
+
+# ---------------- First-time SuperAdmin instructions ----------------
+st.sidebar.markdown("---")
+st.sidebar.markdown("### First-time setup (if no users)")
+st.sidebar.caption("Run this in Supabase SQL Editor to create first SuperAdmin:")
+st.sidebar.code(
+    "INSERT INTO users(username,password_hash,role,section_scope,is_active)\n"
+    "VALUES('admin','pbkdf2_sha256$SALT$HASH','SuperAdmin','Both',1);\n"
+    "-- You must replace SALT and HASH. Ask me and I will generate for your password.",
+    language="sql",
+)
