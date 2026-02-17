@@ -11,7 +11,18 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from xhtml2pdf import pisa
+try:
+    from xhtml2pdf import pisa
+    XHTML2PDF_AVAILABLE = True
+except Exception:
+    XHTML2PDF_AVAILABLE = False
+    if not XHTML2PDF_AVAILABLE:
+    st.error("PDF feature is temporarily disabled (cloud dependency issue).")
+    st.stop()
+def html_to_pdf_bytes(html):
+    out = io.BytesIO()
+    pisa.CreatePDF(src=html, dest=out)
+    return out.getvalue()
 from sqlalchemy import create_engine, text
 
 APP_TITLE = "The Adbook — AIAMS v1.0 (Supabase Full)"
