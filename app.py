@@ -12,11 +12,16 @@ st.set_page_config(page_title="The Adbook AIAMS v9.0", layout="wide")
 @st.cache_resource(show_spinner=False)
 def engine():
     db_url = (os.environ.get("DATABASE_URL") or "").strip()
+
     if not db_url:
-        st.error("❌ DATABASE_URL missing in Streamlit Secrets.")
+        st.error("❌ DATABASE_URL missing in Secrets.")
         st.stop()
 
-    # Force psycopg v3 driver for Supabase
+    if "@" not in db_url:
+        st.error("❌ DATABASE_URL looks invalid (missing @). Check Secrets.")
+        st.stop()
+
+    # Force psycopg v3 driver
     if db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
@@ -25,14 +30,6 @@ def engine():
         db_url += ("&" if "?" in db_url else "?") + "sslmode=require"
 
     return create_engine(db_url, pool_pre_ping=True)
-
-def exec_sql(sql: str, params: dict | None = None):
-    with engine().begin() as conn:
-        conn.execute(text(sql), params or {})
-
-def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
-    with engine().connect() as conn:
-        return pd.read_sql(text(sql), conn, params=params or {})
 
 # ---------- PASSWORD HASH ----------
 def pbkdf2_hash(password: str, salt: str | None = None, iterations: int = 120_000) -> str:
