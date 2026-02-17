@@ -18,27 +18,23 @@ def engine():
     db_url = (os.environ.get("DATABASE_URL") or "").strip()
 
     if not db_url:
-        st.error("❌ DATABASE_URL not set in Streamlit Secrets.")
+        st.error("DATABASE_URL missing in Secrets.")
         st.stop()
 
-    # Force psycopg v3 driver
+    # Force psycopg v3
     if db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
-    # Ensure SSL required for Supabase
+    # Force SSL
     if "sslmode=" not in db_url:
         db_url += ("&" if "?" in db_url else "?") + "sslmode=require"
 
-    return create_engine(db_url, pool_pre_ping=True)
-
-def exec_sql(sql, params=None):
-    with engine().begin() as conn:
-        conn.execute(text(sql), params or {})
-
-def qdf(sql, params=None):
-    with engine().connect() as conn:
-        return pd.read_sql(text(sql), conn, params=params or {})
-
+    return create_engine(
+        db_url,
+        pool_pre_ping=True,
+        pool_size=3,
+        max_overflow=5,
+    )
 # ---------------- PASSWORD HASH ----------------
 def pbkdf2_hash(password: str, salt: str | None = None):
     salt = salt or uuid.uuid4().hex
