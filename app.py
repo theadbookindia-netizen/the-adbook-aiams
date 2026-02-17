@@ -100,48 +100,35 @@ hr{border:0;border-top:1px solid var(--border);margin:1rem 0;}
 )
 
 # ---------------- DB Connection (psycopg v3) ----------------
-def get_database_url() -> str:
-    # Streamlit Cloud: st.secrets["DATABASE_URL"]
-    try:
-        if "DATABASE_URL" in st.secrets:
-            return str(st.secrets["DATABASE_URL"]).strip()
-    except Exception:
-        pass
-    # Local: env var
-    return os.environ.get("DATABASE_URL", "").strip()
-
-def normalize_db_url(db_url: str) -> str:
-    """
-    Force SQLAlchemy to use psycopg (v3) driver instead of psycopg2.
-    Accepts:
-      postgresql://...
-      postgres://...
-      postgresql+psycopg://...
-    Returns:
-      postgresql+psycopg://...
-    """
-    if not db_url:
-        return db_url
-    db_url = db_url.replace("postgres://", "postgresql://")
-    if db_url.startswith("postgresql://"):
-        db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
-    return db_url
-
 @st.cache_resource(show_spinner=False)
 def db_engine():
     db_url = normalize_db_url(get_database_url())
     if not db_url:
-        st.error("DATABASE_URL not found. Add it in Streamlit Secrets or env var DATABASE_URL.")
+        st.error("DATABASE_URL not found. Add it in Streamlit Secrets (Settings → Secrets).")
         st.stop()
-    return create_engine(db_url, pool_pre_ping=True)
 
-def exec_sql(sql: str, params: Optional[Dict[str, Any]] = None) -> None:
-    with db_engine().begin() as conn:
-        conn.execute(text(sql), params or {})
+    # Force SSL if user forgot (Supabase usually requires it)
+    if "sslmode=" not in db_url:
+        joiner = "&" if "?" in db_url else "?"
+        db_url = db_url + f"{joiner}sslmode=require"
 
-def qdf(sql: str, params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
-    with db_engine().connect() as conn:
-        return pd.read_sql(text(sql), conn, params=params or {})
+    try:
+        eng = create_engine(db_url, pool_pre_ping=True)
+        # TEST CONNECTION so we can show a clear error message
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return eng
+    except Exception as e:
+        st.error("❌ Database connection failed.")
+        st.code(str(e))
+        st.info(
+            "Fix tips:\n"
+            "1) Ensure Secrets has sslmode=require\n"
+            "2) Ensure password is correct\n"
+            "3) If password has special characters, it must be URL-encoded\n"
+            "4) Check Supabase Network Restrictions (if enabled)"
+        )
+        st.stop()
 
 # ---------------- Migrations ----------------
 def migrate():
