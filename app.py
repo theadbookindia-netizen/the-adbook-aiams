@@ -127,6 +127,7 @@ def get_database_url() -> str:
 
 @st.cache_resource(show_spinner=False)
 def db_engine():
+    engine = db_engine
     db_url = get_database_url()
     if not db_url:
         st.error("DATABASE_URL not found. Add it in Streamlit Secrets.")
