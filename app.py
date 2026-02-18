@@ -505,23 +505,61 @@ SCOPE = AUTH.get("scope", SCOPE_BOTH)
 # =========================================================
 @st.cache_data(show_spinner=False)
 def read_leads_file(upload=None) -> pd.DataFrame:
+
+    def _read_csv_with_fallbacks(file_obj):
+        # Try common encodings (Excel/Windows/UTF-8)
+        encodings = ["utf-8-sig", "utf-8", "cp1252", "iso-8859-1"]
+
+        for enc in encodings:
+            try:
+                file_obj.seek(0)
+                return pd.read_csv(file_obj, encoding=enc, low_memory=False)
+            except Exception:
+                continue
+
+        # Last fallback: decode with replacement
+        file_obj.seek(0)
+        raw = file_obj.read()
+        text = raw.decode("utf-8", errors="replace")
+        return pd.read_csv(io.StringIO(text), low_memory=False)
+
+    # ---------- When using bundled CSV ----------
     if upload is None:
+
         if not os.path.exists(DATA_FILE):
             st.error(f"Missing {DATA_FILE}. Put it in the same folder as app.py")
             st.stop()
-        df = pd.read_csv(DATA_FILE, encoding="utf-8-sig", low_memory=False)
-    else:
-        name = upload.name.lower()
-        if name.endswith(".csv"):
-            df = pd.read_csv(upload, encoding="utf-8-sig", low_memory=False)
-        else:
-            xl = pd.ExcelFile(upload)
-            sheet = st.selectbox("Sheet", xl.sheet_names)
-            df = pd.read_excel(upload, sheet_name=sheet)
 
-    df.columns = [c.strip() for c in df.columns]
+        with open(DATA_FILE, "rb") as f:
+            raw = f.read()
+
+        try:
+            return pd.read_csv(io.BytesIO(raw), encoding="utf-8-sig", low_memory=False)
+        except Exception:
+            try:
+                return pd.read_csv(io.BytesIO(raw), encoding="cp1252", low_memory=False)
+            except Exception:
+                text = raw.decode("utf-8", errors="replace")
+                return pd.read_csv(io.StringIO(text), low_memory=False)
+
+    # ---------- When user uploads file ----------
+    name = upload.name.lower()
+
+    if name.endswith(".csv"):
+        df = _read_csv_with_fallbacks(upload)
+
+    else:
+        # Excel file
+        xl = pd.ExcelFile(upload)
+        sheet = st.selectbox("Sheet", xl.sheet_names)
+        df = pd.read_excel(upload, sheet_name=sheet)
+
+    # ---------- Cleanup ----------
+    df.columns = [str(c).strip() for c in df.columns]
+
     if "District Type" in df.columns and "City" not in df.columns:
         df = df.rename(columns={"District Type": "City"})
+
     return df
 
 
@@ -535,20 +573,27 @@ def normalize_mobile(x):
     x = "" if x is None else str(x)
     x = re.sub(r"[^0-9+]", "", x).replace("+91", "")
     x = re.sub(r"\D", "", x)
+
     if len(x) > 10:
         x = x[-10:]
+
     return x
 
 
 def make_hash(prop, addr, dist, city, mobile, email):
-    s = "||".join([prop, addr, dist, city, mobile, email]).lower().encode("utf-8", errors="ignore")
+    s = "||".join(
+        [prop, addr, dist, city, mobile, email]
+    ).lower().encode("utf-8", errors="ignore")
+
     return hashlib.sha256(s).hexdigest()
 
 
 def whatsapp_url(mobile, message):
     m = normalize_mobile(mobile)
+
     if not m:
         return "#"
+
     return f"https://wa.me/91{m}?text={quote_plus(message)}"
 
 
