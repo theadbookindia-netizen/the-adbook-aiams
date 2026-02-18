@@ -683,13 +683,55 @@ def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
         )
 
     for row in rows_to_insert:
-        exec_sql(
-            """
+
+    tries = 0
+
+    while True:
+        try:
+            exec_sql("""
             INSERT INTO property_codes(property_id,property_code,district,city,property_name)
             VALUES(:property_id,:property_code,:district,:city,:property_name)
-            ON CONFLICT(property_id) DO NOTHING
-            """,
-            row,
+            ON CONFLICT (property_id) DO UPDATE SET
+                property_code = EXCLUDED.property_code,
+                district = EXCLUDED.district,
+                city = EXCLUDED.city,
+                property_name = EXCLUDED.property_name
+            """, row)
+
+            break  # success
+
+        except Exception as e:
+
+            msg = str(e).lower()
+
+            # If duplicate property_code, generate new code
+            if "property_codes_property_code_key" in msg or "duplicate key" in msg:
+
+                tries += 1
+
+                prefix = row["property_code"][:4]
+                suffix = int(row["property_code"][4:7]) if row["property_code"][4:7].isdigit() else 0
+
+                new_num = suffix + tries + 1
+                row["property_code"] = f"{prefix}{new_num:03d}"
+
+                if tries > 50:
+                    # last fallback: random
+                    row["property_code"] = prefix + uuid.uuid4().hex[:3].upper()
+
+                continue
+
+            else:
+                raise
+      exec_sql("""
+INSERT INTO property_codes(property_id,property_code,district,city,property_name)
+VALUES(:property_id,:property_code,:district,:city,:property_name)
+ON CONFLICT (property_id) DO UPDATE SET
+    property_code = EXCLUDED.property_code,
+    district = EXCLUDED.district,
+    city = EXCLUDED.city,
+    property_name = EXCLUDED.property_name
+""", row
         )
 
     return qdf("SELECT property_id, property_code FROM property_codes")
