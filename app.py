@@ -502,57 +502,65 @@ SCOPE = AUTH.get("scope", SCOPE_BOTH)
 # =========================================================
 # DATA HELPERS
 # =========================================================
+import io
+import os
+import re
+import hashlib
+import numpy as np
+import pandas as pd
+import streamlit as st
+from urllib.parse import quote_plus
+
+# DATA_FILE should already exist in your app (keep your existing value)
+# Example:
+# DATA_FILE = "property_data.csv"
 
 @st.cache_data(show_spinner=False)
 def _read_csv_bytes(file_bytes: bytes) -> pd.DataFrame:
-    """
-    Robust CSV loader:
-    - tries common encodings
-    - falls back to a safe mode that never crashes
-    """
+    """Robust CSV loader that tries common encodings and never crashes."""
     encodings_to_try = ["utf-8-sig", "utf-8", "cp1252", "latin1"]
-
-    last_err = None
     for enc in encodings_to_try:
         try:
-            bio = io.BytesIO(file_bytes)
             return pd.read_csv(
-                bio,
+                io.BytesIO(file_bytes),
                 encoding=enc,
                 dtype=str,
                 low_memory=False,
             )
-        except UnicodeDecodeError as e:
-            last_err = e
+        except UnicodeDecodeError:
+            continue
 
-    # Last fallback: never fail (but may replace some bad characters)
-    bio = io.BytesIO(file_bytes)
+    # Final fallback: skip broken rows, replace bad chars
     return pd.read_csv(
-        bio,
+        io.BytesIO(file_bytes),
         encoding="latin1",
         dtype=str,
         low_memory=False,
         engine="python",
-        on_bad_lines="skip",   # if some rows are broken
+        on_bad_lines="skip",
     )
 
-
 @st.cache_data(show_spinner=False)
-def _read_xlsx_bytes(file_bytes: bytes, sheet_name: str) -> pd.DataFrame:
-    bio = io.BytesIO(file_bytes)
+def _read_excel_bytes(file_bytes: bytes, sheet_name: str) -> pd.DataFrame:
     return pd.read_excel(
-        bio,
+        io.BytesIO(file_bytes),
         sheet_name=sheet_name,
         dtype=str,
         engine="openpyxl",
     )
 
-
 def read_leads_file(upload=None) -> pd.DataFrame:
-    # 1) Load bytes (either from uploaded file or local DATA_FILE)
+    """
+    Reads either:
+    - uploaded CSV/XLSX
+    - or local DATA_FILE if upload is None
+    """
+    # 1) Get file bytes + filename
     if upload is None:
         if not os.path.exists(DATA_FILE):
-            st.error(f"Missing {DATA_FILE}. Put it in the same folder as app.py")
+            st.error(
+                f"Missing {DATA_FILE}. Either upload a CSV/Excel OR add {DATA_FILE} to the repo next to app.py."
+            )
             st.stop()
         with open(DATA_FILE, "rb") as f:
             file_bytes = f.read()
@@ -561,15 +569,15 @@ def read_leads_file(upload=None) -> pd.DataFrame:
         file_bytes = upload.getvalue()
         filename = upload.name.lower()
 
-    # 2) Read CSV / Excel
+    # 2) Load into DataFrame
     if filename.endswith(".csv"):
         df = _read_csv_bytes(file_bytes)
 
     elif filename.endswith(".xlsx") or filename.endswith(".xls"):
-        # IMPORTANT: sheet selector must be OUTSIDE cached functions
+        # Sheet chooser must be OUTSIDE cached function
         xl = pd.ExcelFile(io.BytesIO(file_bytes))
         sheet = st.selectbox("Select sheet", xl.sheet_names, key="sheet_picker")
-        df = _read_xlsx_bytes(file_bytes, sheet)
+        df = _read_excel_bytes(file_bytes, sheet)
 
     else:
         st.error("Unsupported file. Please upload CSV or Excel (.xlsx).")
@@ -578,7 +586,7 @@ def read_leads_file(upload=None) -> pd.DataFrame:
     # 3) Clean columns
     df.columns = [str(c).strip() for c in df.columns]
 
-    # 4) Your rename rule
+    # Your rename rule
     if "District Type" in df.columns and "City" not in df.columns:
         df = df.rename(columns={"District Type": "City"})
 
@@ -595,27 +603,20 @@ def normalize_mobile(x):
     x = "" if x is None else str(x)
     x = re.sub(r"[^0-9+]", "", x).replace("+91", "")
     x = re.sub(r"\D", "", x)
-
     if len(x) > 10:
         x = x[-10:]
-
     return x
 
 
 def make_hash(prop, addr, dist, city, mobile, email):
-    s = "||".join(
-        [prop, addr, dist, city, mobile, email]
-    ).lower().encode("utf-8", errors="ignore")
-
+    s = "||".join([prop, addr, dist, city, mobile, email]).lower().encode("utf-8", errors="ignore")
     return hashlib.sha256(s).hexdigest()
 
 
 def whatsapp_url(mobile, message):
     m = normalize_mobile(mobile)
-
     if not m:
         return "#"
-
     return f"https://wa.me/91{m}?text={quote_plus(message)}"
 
 
