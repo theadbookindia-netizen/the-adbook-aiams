@@ -770,20 +770,39 @@ def ensure_property_codes(leads_df: pd.DataFrame, batch_size: int = 500) -> pd.D
 
 
 def property_display_map(code_df: pd.DataFrame, leads_df: pd.DataFrame) -> dict:
-    name_map = (
-        leads_df.drop_duplicates("__hash")
-        .set_index("__hash")[["Property Name", "City"]]
-        .to_dict("index")
-    )
+    # Build name_map safely
+    base = leads_df.drop_duplicates("__hash").set_index("__hash")
+
+    # Make sure columns exist
+    if "Property Name" not in base.columns:
+        base["Property Name"] = ""
+    if "City" not in base.columns:
+        base["City"] = ""
+
+    name_map = base[["Property Name", "City"]].to_dict("index")
+
+    def safe_text(v) -> str:
+        # Handles None, NaN, numbers, etc.
+        try:
+            if v is None or (hasattr(pd, "isna") and pd.isna(v)):
+                return ""
+        except Exception:
+            pass
+        return str(v).strip()
+
     out = {}
     for pid, code in zip(
         code_df["property_id"].astype("string"),
         code_df["property_code"].astype("string"),
     ):
         info = name_map.get(pid, {})
-        nm = (info.get("Property Name") or "").strip()
-        ct = (info.get("City") or "").strip()
-        out[pid] = f"{code} — {nm[:45]} — {ct}" if (nm or ct) else f"{code} — {str(pid)[:6]}"
+        nm = safe_text(info.get("Property Name"))
+        ct = safe_text(info.get("City"))
+
+        if nm or ct:
+            out[pid] = f"{code} — {nm[:45]} — {ct}"
+        else:
+            out[pid] = f"{code} — {str(pid)[:6]}"
     return out
 
 # =========================================================
