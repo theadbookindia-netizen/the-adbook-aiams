@@ -624,27 +624,32 @@ def whatsapp_url(mobile, message):
 # PROPERTY CODES
 # =========================================================
 def _letters2(x) -> str:
-    # Handle None / NaN / numbers safely
-    if x is None:
-        s = ""
-    else:
-        try:
-            # catches NaN (float) and pandas NA
-            if pd.isna(x):
-                s = ""
-            else:
-                s = str(x)
-        except Exception:
+    """
+    Always returns 2 letters.
+    Works even if x is None / NaN / number.
+    """
+    try:
+        if x is None or (hasattr(pd, "isna") and pd.isna(x)):
+            s = ""
+        else:
             s = str(x)
+    except Exception:
+        s = ""
 
     s = s.upper()
     s = re.sub(r"[^A-Za-z]", "", s)
     return (s + "XX")[:2]
 
+
 def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Assigns a unique property_code (e.g., AHAH001) to each property_id (__hash).
+    Fixes duplicate property_code errors by retrying with next number.
+    """
     needed = leads_df[["__hash", "District", "City", "Property Name"]].drop_duplicates().copy()
     needed.columns = ["property_id", "district", "city", "property_name"]
 
+    # Existing mappings
     existing = qdf("SELECT property_id, property_code FROM property_codes")
     existing_map = (
         dict(zip(existing["property_id"].astype("string"), existing["property_code"].astype("string")))
@@ -655,13 +660,21 @@ def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
     rows_to_insert = []
     for r in needed.to_dict("records"):
         pid = str(r["property_id"])
+
+        # If already has a code, skip
         if pid in existing_map and existing_map[pid] and existing_map[pid] != "nan":
             continue
 
         prefix = _letters2(r.get("district")) + _letters2(r.get("city"))
-        used = qdf("SELECT property_code FROM property_codes WHERE property_code LIKE :p", {"p": f"{prefix}%"})
+
+        # Find used codes for this prefix
+        used = qdf(
+            "SELECT property_code FROM property_codes WHERE property_code LIKE :p",
+            {"p": f"{prefix}%"},
+        )
         used_codes = set(used["property_code"].dropna().astype("string").tolist()) if len(used) else set()
 
+        # Pick next free number
         n = 1
         while True:
             code = f"{prefix}{n:03d}"
@@ -676,75 +689,69 @@ def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
             {
                 "property_id": pid,
                 "property_code": code,
-                "district": r.get("district", ""),
-                "city": r.get("city", ""),
-                "property_name": r.get("property_name", ""),
+                "district": r.get("district", "") or "",
+                "city": r.get("city", "") or "",
+                "property_name": r.get("property_name", "") or "",
             }
         )
 
+    # Insert (with retry if property_code duplicates)
     for row in rows_to_insert:
+        tries = 0
+        while True:
+            try:
+                exec_sql(
+                    """
+                    INSERT INTO property_codes(property_id, property_code, district, city, property_name)
+                    VALUES(:property_id, :property_code, :district, :city, :property_name)
+                    ON CONFLICT (property_id) DO UPDATE SET
+                        property_code = EXCLUDED.property_code,
+                        district = EXCLUDED.district,
+                        city = EXCLUDED.city,
+                        property_name = EXCLUDED.property_name
+                    """,
+                    row,
+                )
+                break  # success
 
-    tries = 0
+            except Exception as e:
+                msg = str(e).lower()
 
-    while True:
-        try:
-            exec_sql("""
-            INSERT INTO property_codes(property_id,property_code,district,city,property_name)
-            VALUES(:property_id,:property_code,:district,:city,:property_name)
-            ON CONFLICT (property_id) DO UPDATE SET
-                property_code = EXCLUDED.property_code,
-                district = EXCLUDED.district,
-                city = EXCLUDED.city,
-                property_name = EXCLUDED.property_name
-            """, row)
+                # Duplicate property_code -> generate a new number and retry
+                if "property_codes_property_code_key" in msg or "duplicate key" in msg:
+                    tries += 1
+                    prefix4 = row["property_code"][:4]  # e.g. AHAH
+                    num_part = row["property_code"][4:7]
+                    base_num = int(num_part) if num_part.isdigit() else 0
+                    new_num = base_num + tries + 1
+                    row["property_code"] = f"{prefix4}{new_num:03d}"
 
-            break  # success
+                    if tries > 50:
+                        # last fallback: random
+                        row["property_code"] = prefix4 + uuid.uuid4().hex[:3].upper()
+                    continue
 
-        except Exception as e:
-
-            msg = str(e).lower()
-
-            # If duplicate property_code, generate new code
-            if "property_codes_property_code_key" in msg or "duplicate key" in msg:
-
-                tries += 1
-
-                prefix = row["property_code"][:4]
-                suffix = int(row["property_code"][4:7]) if row["property_code"][4:7].isdigit() else 0
-
-                new_num = suffix + tries + 1
-                row["property_code"] = f"{prefix}{new_num:03d}"
-
-                if tries > 50:
-                    # last fallback: random
-                    row["property_code"] = prefix + uuid.uuid4().hex[:3].upper()
-
-                continue
-
-            else:
+                # Any other error -> stop and show it
                 raise
-      exec_sql("""
-INSERT INTO property_codes(property_id,property_code,district,city,property_name)
-VALUES(:property_id,:property_code,:district,:city,:property_name)
-ON CONFLICT (property_id) DO UPDATE SET
-    property_code = EXCLUDED.property_code,
-    district = EXCLUDED.district,
-    city = EXCLUDED.city,
-    property_name = EXCLUDED.property_name
-""", row
-        )
 
     return qdf("SELECT property_id, property_code FROM property_codes")
 
 
-def property_display_map(code_df, leads_df):
-    name_map = leads_df.drop_duplicates("__hash").set_index("__hash")[["Property Name", "City"]].to_dict("index")
+def property_display_map(code_df: pd.DataFrame, leads_df: pd.DataFrame) -> dict:
+    name_map = (
+        leads_df.drop_duplicates("__hash")
+        .set_index("__hash")[["Property Name", "City"]]
+        .to_dict("index")
+    )
     out = {}
-    for pid, code in zip(code_df["property_id"].astype("string"), code_df["property_code"].astype("string")):
+    for pid, code in zip(
+        code_df["property_id"].astype("string"),
+        code_df["property_code"].astype("string"),
+    ):
         info = name_map.get(pid, {})
         nm = (info.get("Property Name") or "").strip()
         ct = (info.get("City") or "").strip()
-        out[pid] = f"{code} — {nm[:45]} — {ct}" if nm or ct else f"{code} — {pid[:6]}"
+        out[pid] = f"{code} — {nm[:45]} — {ct}" if (nm or ct) else f"{code} — {str(pid)[:6]}"
     return out
 
 
