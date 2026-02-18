@@ -1,3 +1,35 @@
+def pbkdf2_verify(password: str, stored: str) -> bool:
+    """
+    Supports:
+    - pbkdf2_sha256$SALT$HASH  (secure)
+    - plain$yourpassword       (easy first-time setup)
+    """
+    try:
+        if stored.startswith("plain$"):
+            return password == stored.split("$", 1)[1]
+
+        alg, salt, hexhash = stored.split("$", 2)
+        if alg != "pbkdf2_sha256":
+            return False
+        return pbkdf2_hash(password, salt).split("$", 2)[2] == hexhash
+    except Exception:
+        return False
+def pbkdf2_verify(password: str, stored: str) -> bool:
+    """
+    Supports:
+    - pbkdf2_sha256$SALT$HASH  (secure)
+    - plain$yourpassword       (easy first-time setup)
+    """
+    try:
+        if stored.startswith("plain$"):
+            return password == stored.split("$", 1)[1]
+
+        alg, salt, hexhash = stored.split("$", 2)
+        if alg != "pbkdf2_sha256":
+            return False
+        return pbkdf2_hash(password, salt).split("$", 2)[2] == hexhash
+    except Exception:
+        return False
 import os
 import re
 import io
@@ -395,7 +427,23 @@ def pbkdf2_hash(password: str, salt: str | None = None) -> str:
     dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120_000)
     return f"pbkdf2_sha256${salt}${dk.hex()}"
 
-def pbkdf2_verify(password: str, stored: str) -> bool:     """     Supports:     - pbkdf2_sha256$SALT$HASH  (secure)     - plain$yourpassword       (easy first-time setup)     """     try:         if stored.startswith("plain$"):             return password == stored.split("$", 1)[1]          alg, salt, hexhash = stored.split("$", 2)         if alg != "pbkdf2_sha256":             return False         return pbkdf2_hash(password, salt).split("$", 2)[2] == hexhash     except Exception:         return False
+def pbkdf2_verify(password: str, stored: str) -> bool:
+    """
+    Supports:
+    - pbkdf2_sha256$SALT$HASH  (secure)
+    - plain$yourpassword       (easy first-time setup)
+    """
+    try:
+        if stored.startswith("plain$"):
+            return password == stored.split("$", 1)[1]
+
+        alg, salt, hexhash = stored.split("$", 2)
+        if alg != "pbkdf2_sha256":
+            return False
+        return pbkdf2_hash(password, salt).split("$", 2)[2] == hexhash
+    except Exception:
+        return False
+
     try:
         alg, salt, hexhash = stored.split("$", 2)
         if alg != "pbkdf2_sha256":
