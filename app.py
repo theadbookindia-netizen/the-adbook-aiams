@@ -623,10 +623,23 @@ def whatsapp_url(mobile, message):
 # =========================================================
 # PROPERTY CODES
 # =========================================================
-def _letters2(x):
-    x = re.sub(r"[^A-Za-z]", "", (x or "").upper())
-    return (x + "XX")[:2]
+def _letters2(x) -> str:
+    # Handle None / NaN / numbers safely
+    if x is None:
+        s = ""
+    else:
+        try:
+            # catches NaN (float) and pandas NA
+            if pd.isna(x):
+                s = ""
+            else:
+                s = str(x)
+        except Exception:
+            s = str(x)
 
+    s = s.upper()
+    s = re.sub(r"[^A-Za-z]", "", s)
+    return (s + "XX")[:2]
 
 def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
     needed = leads_df[["__hash", "District", "City", "Property Name"]].drop_duplicates().copy()
