@@ -5,29 +5,19 @@ def pbkdf2_verify(password: str, stored: str) -> bool:
     - plain$yourpassword       (easy first-time setup)
     """
     try:
+        if not stored:
+            return False
+
+        # Allow simple password for first admin
         if stored.startswith("plain$"):
             return password == stored.split("$", 1)[1]
 
         alg, salt, hexhash = stored.split("$", 2)
         if alg != "pbkdf2_sha256":
             return False
-        return pbkdf2_hash(password, salt).split("$", 2)[2] == hexhash
-    except Exception:
-        return False
-def pbkdf2_verify(password: str, stored: str) -> bool:
-    """
-    Supports:
-    - pbkdf2_sha256$SALT$HASH  (secure)
-    - plain$yourpassword       (easy first-time setup)
-    """
-    try:
-        if stored.startswith("plain$"):
-            return password == stored.split("$", 1)[1]
 
-        alg, salt, hexhash = stored.split("$", 2)
-        if alg != "pbkdf2_sha256":
-            return False
         return pbkdf2_hash(password, salt).split("$", 2)[2] == hexhash
+
     except Exception:
         return False
 import os
