@@ -678,7 +678,7 @@ def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
 
             # Try insert. If property_code already exists, DO NOTHING (no crash).
             # If property_id already exists, DO NOTHING (shouldn't happen due to skip, but safe).
-            with engine().begin() as conn:
+            with db_engine().begin() as conn: as conn:
                 res = conn.execute(
                     text("""
                         INSERT INTO property_codes(property_id, property_code, district, city, property_name)
@@ -698,7 +698,7 @@ def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
             # Safety fallback if it becomes too large
             if n > 999:
                 code = f"{prefix}{uuid.uuid4().hex[:3].upper()}"
-                with engine().begin() as conn:
+                with db_engine().begin() as conn: as conn:
                     res2 = conn.execute(
                         text("""
                             INSERT INTO property_codes(property_id, property_code, district, city, property_name)
