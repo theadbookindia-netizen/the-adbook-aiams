@@ -134,30 +134,47 @@ def get_database_url() -> str:
 
 
 @st.cache_resource(show_spinner=False)
-def db_engine() -> Engine:
-    db_url = get_database_url()
-    if not db_url:
-        st.error("DATABASE_URL not found. Add it in Streamlit Secrets (Manage app → Settings → Secrets).")
-        st.stop()
+import os
+import socket
+import streamlit as st
+from sqlalchemy import create_engine
 
-    # Fix Supabase Pooler/PgBouncer "DuplicatePreparedStatement"
-    # by disabling prepared statements.
+@st.cache_resource(show_spinner=False)
+def db_engine():
+    """
+    Creates a SQLAlchemy engine and forces IPv4 (Streamlit Cloud often fails on IPv6).
+    """
+    db_url = os.getenv("DATABASE_URL", "").strip()
+    if not db_url:
+        raise RuntimeError("DATABASE_URL is missing. Add it in Streamlit Secrets or Environment Variables.")
+
+    # Extract host from URL (basic, robust enough for standard postgres URLs)
+    # Example: postgresql://user:pass@host:port/dbname?sslmode=require
+    try:
+        hostport = db_url.split("@", 1)[1].split("/", 1)[0]
+        host = hostport.split(":", 1)[0]
+        host = host.strip("[]")  # handles bracketed IPv6 just in case
+    except Exception:
+        host = None
+
+    connect_args = {}
+
+    # Force IPv4 if we can resolve it
+    if host:
+        try:
+            infos = socket.getaddrinfo(host, None, family=socket.AF_INET)  # IPv4 only
+            ipv4 = infos[0][4][0]
+            connect_args["hostaddr"] = ipv4  # libpq / psycopg uses this
+        except Exception:
+            # If IPv4 can't be resolved, we just try normally.
+            pass
+
     return create_engine(
         db_url,
         pool_pre_ping=True,
         pool_recycle=300,
-        connect_args={"prepare_threshold": 0},
+        connect_args=connect_args,
     )
-
-
-def exec_sql(sql: str, params: dict | None = None):
-    with db_engine().begin() as conn:
-        conn.execute(text(sql), params or {})
-
-
-def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
-    with db_engine().connect() as conn:
-        return pd.read_sql(text(sql), conn, params=params or {})
 
 
 # ---------------- Security Helpers ----------------
