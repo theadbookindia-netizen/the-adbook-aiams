@@ -622,8 +622,9 @@ def whatsapp_url(mobile, message):
 
 
 # =========================================================
-# PROPERTY CODES
+# PROPERTY CODES (FAST BULK)
 # =========================================================
+
 def _letters2(x) -> str:
     """
     Always returns 2 letters.
@@ -636,32 +637,61 @@ def _letters2(x) -> str:
             s = str(x)
     except Exception:
         s = ""
-
     s = s.upper()
     s = re.sub(r"[^A-Za-z]", "", s)
     return (s + "XX")[:2]
 
 
-def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
+def ensure_property_codes(leads_df: pd.DataFrame, batch_size: int = 500) -> pd.DataFrame:
     """
-    Creates unique property_code per property_id.
-    Uses ON CONFLICT(property_code) DO NOTHING and retries, so duplicate codes never crash.
+    FAST bulk code generation.
+
+    Strategy:
+    1) Build list of needed property_ids from leads_df.
+    2) Read existing property_codes table ONCE.
+    3) For each prefix (District+City), compute next available number in memory.
+    4) Insert in batches.
+    5) If rare duplicate happens, retry with next number.
     """
+
+    # 1) Need list
     needed = leads_df[["__hash", "District", "City", "Property Name"]].drop_duplicates().copy()
     needed.columns = ["property_id", "district", "city", "property_name"]
 
-    # Fetch existing mappings
+    # 2) Read existing codes once
     existing = qdf("SELECT property_id, property_code FROM property_codes")
-    existing_map = (
-        dict(zip(existing["property_id"].astype("string"), existing["property_code"].astype("string")))
-        if len(existing)
-        else {}
-    )
+    existing_map = {}
+    used_by_prefix = {}  # {"AHAH": set([1,2,3])}
 
+    if len(existing):
+        for pid, pcode in zip(existing["property_id"].astype("string"), existing["property_code"].astype("string")):
+            if pid and pcode and pcode != "nan":
+                existing_map[str(pid)] = str(pcode)
+
+            # Track used numbers per prefix (e.g., AHAH001 -> prefix=AHAH, num=1)
+            pc = str(pcode or "")
+            if len(pc) >= 7 and pc[:4].isalpha() and pc[4:7].isdigit():
+                pref = pc[:4]
+                num = int(pc[4:7])
+                used_by_prefix.setdefault(pref, set()).add(num)
+
+    # helper: next available number for a prefix
+    next_num = {}  # {"AHAH": 4}
+    def _next_for_prefix(pref: str) -> int:
+        if pref not in next_num:
+            if pref in used_by_prefix and used_by_prefix[pref]:
+                next_num[pref] = max(used_by_prefix[pref]) + 1
+            else:
+                next_num[pref] = 1
+        return next_num[pref]
+
+    inserts = []
+
+    # 3) Create codes in memory (no DB calls here)
     for r in needed.to_dict("records"):
         pid = str(r["property_id"])
 
-        # If already has code, skip
+        # already mapped -> skip
         if pid in existing_map and existing_map[pid] and existing_map[pid] != "nan":
             continue
 
@@ -669,136 +699,72 @@ def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
         city = r.get("city", "") or ""
         pname = r.get("property_name", "") or ""
 
-        prefix = _letters2(district) + _letters2(city)
+        pref = _letters2(district) + _letters2(city)
 
-        # We retry until insert succeeds
-        n = 1
-        while True:
-            code = f"{prefix}{n:03d}"
-
-            # Try insert. If property_code already exists, DO NOTHING (no crash).
-            # If property_id already exists, DO NOTHING (shouldn't happen due to skip, but safe).
-            with db_engine().begin() as conn:
-                res = conn.execute(
-                    text("""
-                        INSERT INTO property_codes(property_id, property_code, district, city, property_name)
-                        VALUES(:pid, :code, :district, :city, :pname)
-                        ON CONFLICT (property_code) DO NOTHING
-                    """),
-                    {"pid": pid, "code": code, "district": district, "city": city, "pname": pname},
-                )
-
-            # If inserted, rowcount will be 1
-            if getattr(res, "rowcount", 0) == 1:
-                break
-
-            # Not inserted because code was already taken -> try next number
+        n = _next_for_prefix(pref)
+        # ensure not used
+        while n in used_by_prefix.get(pref, set()):
             n += 1
 
-            # Safety fallback if it becomes too large
-            if n > 999:
-                code = f"{prefix}{uuid.uuid4().hex[:3].upper()}"
-                with db_engine().begin() as conn:
-                    res2 = conn.execute(
-                        text("""
-                            INSERT INTO property_codes(property_id, property_code, district, city, property_name)
-                            VALUES(:pid, :code, :district, :city, :pname)
-                            ON CONFLICT (property_code) DO NOTHING
-                        """),
-                        {"pid": pid, "code": code, "district": district, "city": city, "pname": pname},
-                    )
-                if getattr(res2, "rowcount", 0) == 1:
-                    break
-                # if still conflicts (very rare) just restart number loop
-                n = 1
+        code = f"{pref}{n:03d}"
 
-    return qdf("SELECT property_id, property_code FROM property_codes")
+        # reserve number in memory
+        used_by_prefix.setdefault(pref, set()).add(n)
+        next_num[pref] = n + 1
 
+        inserts.append({"pid": pid, "code": code, "district": district, "city": city, "pname": pname})
 
-    # Existing mappings
-    existing = qdf("SELECT property_id, property_code FROM property_codes")
-    existing_map = (
-        dict(zip(existing["property_id"].astype("string"), existing["property_code"].astype("string")))
-        if len(existing)
-        else {}
-    )
+    if not inserts:
+        return qdf("SELECT property_id, property_code FROM property_codes")
 
-    rows_to_insert = []
-    for r in needed.to_dict("records"):
-        pid = str(r["property_id"])
+    # 4) Insert in batches (fast)
+    def _insert_batch(rows):
+        sql = text("""
+            INSERT INTO property_codes(property_id, property_code, district, city, property_name)
+            VALUES(:pid, :code, :district, :city, :pname)
+            ON CONFLICT (property_id) DO NOTHING
+        """)
+        with db_engine().begin() as conn:
+            conn.execute(sql, rows)
 
-        # If already has a code, skip
-        if pid in existing_map and existing_map[pid] and existing_map[pid] != "nan":
-            continue
+    # 5) Rare collision handling:
+    # If property_code unique collision happens (very rare), we retry individually.
+    for i in range(0, len(inserts), batch_size):
+        batch = inserts[i:i+batch_size]
+        try:
+            _insert_batch(batch)
+        except Exception:
+            # Retry one-by-one with incrementing number
+            for row in batch:
+                pref = row["code"][:4]
+                tries = 0
+                while True:
+                    try:
+                        with db_engine().begin() as conn:
+                            conn.execute(
+                                text("""
+                                    INSERT INTO property_codes(property_id, property_code, district, city, property_name)
+                                    VALUES(:pid, :code, :district, :city, :pname)
+                                    ON CONFLICT (property_code) DO NOTHING
+                                """),
+                                row,
+                            )
+                        # If insert did nothing, it means code existed; generate next and retry
+                        # We detect "did nothing" by checking if property_id now exists:
+                        chk = qdf("SELECT 1 FROM property_codes WHERE property_id=:p LIMIT 1", {"p": row["pid"]})
+                        if len(chk):
+                            break
+                    except Exception:
+                        pass
 
-        prefix = _letters2(r.get("district")) + _letters2(r.get("city"))
-
-        # Find used codes for this prefix
-        used = qdf(
-            "SELECT property_code FROM property_codes WHERE property_code LIKE :p",
-            {"p": f"{prefix}%"},
-        )
-        used_codes = set(used["property_code"].dropna().astype("string").tolist()) if len(used) else set()
-
-        # Pick next free number
-        n = 1
-        while True:
-            code = f"{prefix}{n:03d}"
-            if code not in used_codes:
-                break
-            n += 1
-            if n > 999:
-                code = f"{prefix}{uuid.uuid4().hex[:3].upper()}"
-                break
-
-        rows_to_insert.append(
-            {
-                "property_id": pid,
-                "property_code": code,
-                "district": r.get("district", "") or "",
-                "city": r.get("city", "") or "",
-                "property_name": r.get("property_name", "") or "",
-            }
-        )
-
-    # Insert (with retry if property_code duplicates)
-    for row in rows_to_insert:
-        tries = 0
-        while True:
-            try:
-                exec_sql(
-                    """
-                    INSERT INTO property_codes(property_id, property_code, district, city, property_name)
-                    VALUES(:property_id, :property_code, :district, :city, :property_name)
-                    ON CONFLICT (property_id) DO UPDATE SET
-                        property_code = EXCLUDED.property_code,
-                        district = EXCLUDED.district,
-                        city = EXCLUDED.city,
-                        property_name = EXCLUDED.property_name
-                    """,
-                    row,
-                )
-                break  # success
-
-            except Exception as e:
-                msg = str(e).lower()
-
-                # Duplicate property_code -> generate a new number and retry
-                if "property_codes_property_code_key" in msg or "duplicate key" in msg:
                     tries += 1
-                    prefix4 = row["property_code"][:4]  # e.g. AHAH
-                    num_part = row["property_code"][4:7]
-                    base_num = int(num_part) if num_part.isdigit() else 0
-                    new_num = base_num + tries + 1
-                    row["property_code"] = f"{prefix4}{new_num:03d}"
+                    n = _next_for_prefix(pref)
+                    row["code"] = f"{pref}{n:03d}"
+                    used_by_prefix.setdefault(pref, set()).add(n)
+                    next_num[pref] = n + 1
 
                     if tries > 50:
-                        # last fallback: random
-                        row["property_code"] = prefix4 + uuid.uuid4().hex[:3].upper()
-                    continue
-
-                # Any other error -> stop and show it
-                raise
+                        row["code"] = pref + uuid.uuid4().hex[:3].upper()
 
     return qdf("SELECT property_id, property_code FROM property_codes")
 
@@ -819,7 +785,6 @@ def property_display_map(code_df: pd.DataFrame, leads_df: pd.DataFrame) -> dict:
         ct = (info.get("City") or "").strip()
         out[pid] = f"{code} — {nm[:45]} — {ct}" if (nm or ct) else f"{code} — {str(pid)[:6]}"
     return out
-
 
 # =========================================================
 # LEAD UPDATES
