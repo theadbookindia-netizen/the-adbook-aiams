@@ -678,7 +678,7 @@ def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
 
             # Try insert. If property_code already exists, DO NOTHING (no crash).
             # If property_id already exists, DO NOTHING (shouldn't happen due to skip, but safe).
-            with db_engine().begin() as conn: as conn:
+            with db_engine().begin() as conn:
                 res = conn.execute(
                     text("""
                         INSERT INTO property_codes(property_id, property_code, district, city, property_name)
