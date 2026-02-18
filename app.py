@@ -1,10 +1,3 @@
-# app.py
-# The Adbook — AIAMS (Supabase + Streamlit Cloud, Pooler-safe)
-# ✅ Works on Streamlit Cloud
-# ✅ Uses ReportLab for PDF (no xhtml2pdf dependency)
-# ✅ Supabase Pooler safe (disables prepared statements)
-# ✅ First-time Admin creation from inside the app (no SQL editor needed)
-
 import os
 import re
 import io
@@ -19,13 +12,55 @@ import pandas as pd
 import streamlit as st
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
-# ---------------- App Config ----------------
-APP_TITLE = "The Adbook — AIAMS v1.0 (Supabase)"
+# ---- PDF (Cloud-safe) ----
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from io import BytesIO
+
+
+# =========================================================
+# BASIC CONFIG
+# =========================================================
+APP_TITLE = "The Adbook — AIAMS (Supabase)"
 WEBSITE_URL = "https://theadbookoutdoor.com/"
 DATA_FILE = "property_data.csv"
 
+st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="🟧")
+
+st.markdown(
+    """
+<style>
+:root{
+  --bg:#ffffff; --surface:#ffffff; --surface2:#f6f8fb; --border:#e6e8ef;
+  --text:#0f172a; --muted:#475569; --accent:#0f5b66; --warn:#b45309; --danger:#b91c1c;
+}
+.block-container{max-width:1560px;padding-top:.65rem;padding-bottom:2rem;}
+[data-testid="stAppViewContainer"]{background:var(--bg);}
+[data-testid="stHeader"]{background:rgba(255,255,255,.92);border-bottom:1px solid var(--border);}
+[data-testid="stSidebar"]{background:var(--surface2);border-right:1px solid var(--border);}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:14px;box-shadow:0 8px 24px rgba(15,23,42,.06);}
+.card-tight{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px;}
+.small{color:var(--muted);font-size:.92rem;}
+.section{font-weight:850;font-size:1.05rem;margin:0 0 .25rem 0;}
+.kpi{background:#fff;border:1px solid var(--border);border-radius:16px;padding:10px 12px;}
+.kpi .label{color:var(--muted);font-size:.85rem;margin-bottom:2px;}
+.kpi .val{font-weight:850;font-size:1.25rem;color:var(--text);}
+.sticky-wrap{position:sticky;top:0;z-index:999;background:rgba(255,255,255,.96);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--border);padding:8px 0 10px 0;margin-bottom:10px;}
+div.stButton>button{width:100%;border-radius:12px;padding:.65rem .9rem;font-weight:650;border:1px solid var(--border);}
+div.stButton>button[kind="primary"]{background:var(--accent);color:#fff;border:1px solid rgba(15,91,102,.35);}
+hr{border:0;border-top:1px solid var(--border);margin:1rem 0;}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# ROLES / PERMS
+# =========================================================
 SECTION_INSTALL = "Installation"
 SECTION_ADS = "Advertisement"
 SCOPE_BOTH = "Both"
@@ -64,146 +99,75 @@ DEFAULT_PERMS = {
 LEAD_STATUS = ["New", "Contacted", "Follow-up Required", "Interested", "Installed", "Active", "Rejected/Not Suitable"]
 CALL_OUTCOMES = ["Interested", "Follow-up", "Not Reachable", "Rejected"]
 
-BILLING_CYCLES = ["One-time", "Monthly", "Quarterly", "Yearly"]
-PAYMENT_STATUS = ["Due", "Paid", "Overdue"]
-
-DOC_TYPES_INSTALL = ["Society Agreement Copy", "Permission Letter", "NOC", "Installation Checklist", "Agreement Copy", "Property Photo", "Other"]
-DOC_TYPES_ADS = ["Advertisement Agreement", "Subscription Agreement", "Invoice Copy", "Receipt", "Creative/Artwork", "Other"]
+DOC_TYPES_INSTALL = [
+    "Society Agreement Copy", "Permission Letter", "NOC", "Installation Checklist",
+    "Agreement Copy", "Property Photo", "Other"
+]
 
 UPLOAD_ROOT = "uploads_docs"
 UPLOAD_INSTALL = os.path.join(UPLOAD_ROOT, "installation")
-UPLOAD_ADS = os.path.join(UPLOAD_ROOT, "advertisement")
 UPLOAD_SIG = os.path.join(UPLOAD_ROOT, "signatures")
 os.makedirs(UPLOAD_INSTALL, exist_ok=True)
-os.makedirs(UPLOAD_ADS, exist_ok=True)
 os.makedirs(UPLOAD_SIG, exist_ok=True)
 
-# ---------------- UI ----------------
-st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="🟧")
-st.markdown(
-    """
-<style>
-:root{
-  --bg:#ffffff; --surface:#ffffff; --surface2:#f6f8fb; --border:#e6e8ef;
-  --text:#0f172a; --muted:#475569; --accent:#0f5b66; --warn:#b45309; --danger:#b91c1c;
-}
-.block-container{max-width:1560px;padding-top:.65rem;padding-bottom:2rem;}
-[data-testid="stAppViewContainer"]{background:var(--bg);}
-[data-testid="stHeader"]{background:rgba(255,255,255,.92);border-bottom:1px solid var(--border);}
-[data-testid="stSidebar"]{background:var(--surface2);border-right:1px solid var(--border);}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:14px;box-shadow:0 8px 24px rgba(15,23,42,.06);}
-.card-tight{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px;}
-.small{color:var(--muted);font-size:.92rem;}
-.section{font-weight:850;font-size:1.05rem;margin:0 0 .25rem 0;}
-.kpi{background:#fff;border:1px solid var(--border);border-radius:16px;padding:10px 12px;}
-.kpi .label{color:var(--muted);font-size:.85rem;margin-bottom:2px;}
-.kpi .val{font-weight:850;font-size:1.25rem;color:var(--text);}
-.sticky-wrap{position:sticky;top:0;z-index:999;background:rgba(255,255,255,.96);backdrop-filter:blur(6px);
-  border-bottom:1px solid var(--border);padding:8px 0 10px 0;margin-bottom:10px;}
-div.stButton>button{width:100%;border-radius:12px;padding:.65rem .9rem;font-weight:650;border:1px solid var(--border);}
-div.stButton>button[kind="primary"]{background:var(--accent);color:#fff;border:1px solid rgba(15,91,102,.35);}
-hr{border:0;border-top:1px solid var(--border);margin:1rem 0;}
-</style>
-""",
-    unsafe_allow_html=True,
-)
 
-
-# ---------------- Database Connection (Supabase Pooler Safe) ----------------
+# =========================================================
+# DATABASE (SUPABASE)
+# =========================================================
 def get_database_url() -> str:
-    """
-    IMPORTANT: Put DATABASE_URL in Streamlit Cloud -> Manage App -> Settings -> Secrets
-    Example:
-    DATABASE_URL = "postgresql+psycopg://USER:PASSWORD@aws-...pooler.supabase.com:6543/postgres?sslmode=require"
-    """
-    db_url = ""
+    # Prefer Streamlit secrets
     try:
         if "DATABASE_URL" in st.secrets:
-            db_url = str(st.secrets["DATABASE_URL"]).strip()
+            return str(st.secrets["DATABASE_URL"]).strip()
     except Exception:
         pass
+    # Fallback env var
+    return os.environ.get("DATABASE_URL", "").strip()
 
-    if not db_url:
-        db_url = (os.environ.get("DATABASE_URL") or "").strip()
-
-    # Upgrade plain postgresql:// to psycopg3 dialect
-    if db_url.startswith("postgresql://"):
-        db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
-
-    return db_url
 
 @st.cache_resource(show_spinner=False)
 def db_engine():
-    """
-    Creates a SQLAlchemy engine and forces IPv4 (Streamlit Cloud often fails on IPv6).
-    """
-    db_url = os.getenv("DATABASE_URL", "").strip()
+    db_url = get_database_url()
     if not db_url:
-        raise RuntimeError("DATABASE_URL is missing. Add it in Streamlit Secrets or Environment Variables.")
+        st.error("DATABASE_URL not found. Add it in Streamlit Secrets.")
+        st.stop()
 
-    # Extract host from URL (basic, robust enough for standard postgres URLs)
-    # Example: postgresql://user:pass@host:port/dbname?sslmode=require
-    try:
-        hostport = db_url.split("@", 1)[1].split("/", 1)[0]
-        host = hostport.split(":", 1)[0]
-        host = host.strip("[]")  # handles bracketed IPv6 just in case
-    except Exception:
-        host = None
+    # Strongly recommend psycopg driver
+    if "postgresql+psycopg://" not in db_url:
+        st.warning("Tip: Use 'postgresql+psycopg://' in DATABASE_URL for best compatibility on Streamlit Cloud.")
 
-    connect_args = {}
-
-    # Force IPv4 if we can resolve it
-    if host:
-        try:
-            infos = socket.getaddrinfo(host, None, family=socket.AF_INET)  # IPv4 only
-            ipv4 = infos[0][4][0]
-            connect_args["hostaddr"] = ipv4  # libpq / psycopg uses this
-        except Exception:
-            # If IPv4 can't be resolved, we just try normally.
-            pass
-
+    # Small pool + pre_ping
     return create_engine(
         db_url,
         pool_pre_ping=True,
-        pool_recycle=300,
-        connect_args=connect_args,
+        pool_size=3,
+        max_overflow=2,
+        pool_timeout=30,
     )
 
 
-# ---------------- Security Helpers ----------------
-def pbkdf2_hash(password: str, salt: str | None = None) -> str:
-    salt = salt or uuid.uuid4().hex
-    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120_000)
-    return f"pbkdf2_sha256${salt}${dk.hex()}"
-
-
-def pbkdf2_verify(password: str, stored: str) -> bool:
-    """
-    Supports:
-    - pbkdf2_sha256$SALT$HASH  (secure)
-    - plain$yourpassword       (optional simple bootstrap)
-    """
+def exec_sql(sql: str, params: dict | None = None) -> None:
     try:
-        if stored.startswith("plain$"):
-            return password == stored.split("$", 1)[1]
-
-        alg, salt, hexhash = stored.split("$", 2)
-        if alg != "pbkdf2_sha256":
-            return False
-        return pbkdf2_hash(password, salt).split("$", 2)[2] == hexhash
-    except Exception:
-        return False
+        with db_engine().begin() as conn:
+            conn.execute(text(sql), params or {})
+    except SQLAlchemyError as e:
+        st.error("Database error while executing SQL.")
+        st.code(str(e))
+        st.stop()
 
 
-def audit(user, action, details=""):
-    exec_sql(
-        "INSERT INTO audit_logs(log_id,username,action_type,details) VALUES(:id,:u,:a,:d)",
-        {"id": str(uuid.uuid4()), "u": user, "a": action, "d": details},
-    )
+def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
+    try:
+        with db_engine().connect() as conn:
+            return pd.read_sql(text(sql), conn, params=params or {})
+    except SQLAlchemyError as e:
+        st.error("Database error while reading data.")
+        st.code(str(e))
+        st.stop()
 
 
-# ---------------- Migrations ----------------
-def migrate():
+def migrate() -> None:
+    # Users
     exec_sql("""
     CREATE TABLE IF NOT EXISTS users(
       username TEXT PRIMARY KEY,
@@ -217,6 +181,7 @@ def migrate():
     )
     """)
 
+    # Permissions
     exec_sql("""
     CREATE TABLE IF NOT EXISTS permissions(
       id TEXT PRIMARY KEY,
@@ -231,6 +196,7 @@ def migrate():
     )
     """)
 
+    # Audit
     exec_sql("""
     CREATE TABLE IF NOT EXISTS audit_logs(
       log_id TEXT PRIMARY KEY,
@@ -241,6 +207,7 @@ def migrate():
     )
     """)
 
+    # Property codes
     exec_sql("""
     CREATE TABLE IF NOT EXISTS property_codes(
       property_id TEXT PRIMARY KEY,
@@ -252,8 +219,9 @@ def migrate():
     )
     """)
 
+    # Lead updates
     exec_sql("""
-    CREATE TABLE IF NOT EXISTS lead_updates_v1(
+    CREATE TABLE IF NOT EXISTS lead_updates(
       record_hash TEXT NOT NULL,
       section TEXT NOT NULL,
       status TEXT,
@@ -268,8 +236,9 @@ def migrate():
     )
     """)
 
+    # Inventory
     exec_sql("""
-    CREATE TABLE IF NOT EXISTS inventory_sites_v1(
+    CREATE TABLE IF NOT EXISTS inventory_sites(
       property_id TEXT PRIMARY KEY,
       property_code TEXT,
       district TEXT,
@@ -293,8 +262,9 @@ def migrate():
     )
     """)
 
+    # Screens
     exec_sql("""
-    CREATE TABLE IF NOT EXISTS screens_v1(
+    CREATE TABLE IF NOT EXISTS screens(
       screen_id TEXT PRIMARY KEY,
       property_id TEXT NOT NULL,
       screen_location TEXT,
@@ -307,73 +277,11 @@ def migrate():
     )
     """)
 
+    # Documents
     exec_sql("""
-    CREATE TABLE IF NOT EXISTS advertisers_v1(
-      advertiser_id TEXT PRIMARY KEY,
-      company_name TEXT,
-      contact_person TEXT,
-      mobile TEXT,
-      email TEXT,
-      gst TEXT,
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-    """)
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS ad_allotments_v1(
-      allotment_id TEXT PRIMARY KEY,
-      screen_id TEXT,
-      advertiser_id TEXT,
-      start_date TEXT,
-      end_date TEXT,
-      monthly_amount DOUBLE PRECISION,
-      status TEXT,
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      last_updated TIMESTAMP DEFAULT NOW()
-    )
-    """)
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS agreements_v1(
-      agr_id TEXT PRIMARY KEY,
-      section TEXT NOT NULL,
-      property_id TEXT,
-      advertiser_id TEXT,
-      title TEXT,
-      start_date TEXT,
-      end_date TEXT,
-      amount DOUBLE PRECISION,
-      billing_cycle TEXT,
-      status TEXT,
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      last_updated TIMESTAMP DEFAULT NOW()
-    )
-    """)
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS payments_v1(
-      pay_id TEXT PRIMARY KEY,
-      agr_id TEXT NOT NULL,
-      due_date TEXT,
-      amount_due DOUBLE PRECISION,
-      status TEXT,
-      paid_date TEXT,
-      mode TEXT,
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      last_updated TIMESTAMP DEFAULT NOW()
-    )
-    """)
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS documents_v1(
+    CREATE TABLE IF NOT EXISTS documents_install(
       doc_id TEXT PRIMARY KEY,
-      section TEXT NOT NULL,
       property_id TEXT,
-      advertiser_id TEXT,
       doc_type TEXT,
       filename TEXT,
       issue_date TEXT,
@@ -383,12 +291,12 @@ def migrate():
     )
     """)
 
+    # Proposals
     exec_sql("""
-    CREATE TABLE IF NOT EXISTS proposals_v1(
+    CREATE TABLE IF NOT EXISTS proposals(
       proposal_id TEXT PRIMARY KEY,
       section TEXT NOT NULL,
       property_id TEXT,
-      advertiser_id TEXT,
       proposal_no INTEGER NOT NULL,
       created_by TEXT,
       created_at TIMESTAMP DEFAULT NOW(),
@@ -397,10 +305,10 @@ def migrate():
     )
     """)
 
+    # WhatsApp logs
     exec_sql("""
-    CREATE TABLE IF NOT EXISTS whatsapp_logs_v1(
+    CREATE TABLE IF NOT EXISTS whatsapp_logs(
       log_id TEXT PRIMARY KEY,
-      campaign_id TEXT,
       lead_hash TEXT,
       username TEXT,
       action_status TEXT,
@@ -408,8 +316,9 @@ def migrate():
     )
     """)
 
+    # Company settings
     exec_sql("""
-    CREATE TABLE IF NOT EXISTS company_settings_v1(
+    CREATE TABLE IF NOT EXISTS company_settings(
       settings_id TEXT PRIMARY KEY,
       gst_no TEXT,
       bank_details TEXT,
@@ -418,8 +327,9 @@ def migrate():
     )
     """)
 
+    # User profiles (signature)
     exec_sql("""
-    CREATE TABLE IF NOT EXISTS user_profiles_v1(
+    CREATE TABLE IF NOT EXISTS user_profiles(
       username TEXT PRIMARY KEY,
       signature_filename TEXT,
       designation TEXT,
@@ -430,38 +340,191 @@ def migrate():
     """)
 
 
-migrate()
-
-
 def seed_permissions_once():
-    try:
-        c = int(qdf("SELECT COUNT(*) AS c FROM permissions").iloc[0]["c"] or 0)
-    except Exception:
-        c = 0
-
-    if c == 0:
-        for role, sections in DEFAULT_PERMS.items():
-            for sec, perm in sections.items():
-                exec_sql(
-                    """INSERT INTO permissions(id,role,section,can_view,can_add,can_edit,can_delete,can_export)
-                       VALUES(:id,:role,:section,:v,:a,:e,:d,:x)""",
-                    {
-                        "id": str(uuid.uuid4()),
-                        "role": role,
-                        "section": sec,
-                        "v": int(perm["view"]),
-                        "a": int(perm["add"]),
-                        "e": int(perm["edit"]),
-                        "d": int(perm["delete"]),
-                        "x": int(perm["export"]),
-                    },
-                )
+    c = int(qdf("SELECT COUNT(*) AS c FROM permissions").iloc[0]["c"] or 0)
+    if c > 0:
+        return
+    for role, sections in DEFAULT_PERMS.items():
+        for sec, perm in sections.items():
+            exec_sql(
+                """INSERT INTO permissions(id,role,section,can_view,can_add,can_edit,can_delete,can_export)
+                   VALUES(:id,:role,:section,:v,:a,:e,:d,:x)""",
+                {
+                    "id": str(uuid.uuid4()),
+                    "role": role,
+                    "section": sec,
+                    "v": int(perm["view"]),
+                    "a": int(perm["add"]),
+                    "e": int(perm["edit"]),
+                    "d": int(perm["delete"]),
+                    "x": int(perm["export"]),
+                },
+            )
 
 
+migrate()
 seed_permissions_once()
 
 
-# ---------------- Utility ----------------
+# =========================================================
+# AUTH (PBKDF2) + SIMPLE PLAIN$ SUPPORT FOR FIRST TIME
+# =========================================================
+def pbkdf2_hash(password: str, salt: str | None = None) -> str:
+    salt = salt or uuid.uuid4().hex
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120_000)
+    return f"pbkdf2_sha256${salt}${dk.hex()}"
+
+
+def pbkdf2_verify(password: str, stored: str) -> bool:
+    """
+    Supports:
+    - pbkdf2_sha256$SALT$HASH (secure)
+    - plain$yourpassword      (easy first-time setup)
+    """
+    try:
+        if stored.startswith("plain$"):
+            return password == stored.split("$", 1)[1]
+
+        alg, salt, hexhash = stored.split("$", 2)
+        if alg != "pbkdf2_sha256":
+            return False
+        return pbkdf2_hash(password, salt).split("$", 2)[2] == hexhash
+    except Exception:
+        return False
+
+
+def audit(user: str, action: str, details: str = ""):
+    exec_sql(
+        "INSERT INTO audit_logs(log_id,username,action_type,details) VALUES(:id,:u,:a,:d)",
+        {"id": str(uuid.uuid4()), "u": user, "a": action, "d": details},
+    )
+
+
+def get_user(username: str):
+    df = qdf("SELECT * FROM users WHERE username=:u", {"u": username})
+    return df.iloc[0].to_dict() if len(df) else None
+
+
+def set_last_login(username: str):
+    exec_sql("UPDATE users SET last_login_at=NOW(), updated_at=NOW() WHERE username=:u", {"u": username})
+
+
+@st.cache_data(show_spinner=False)
+def load_permissions():
+    return qdf("SELECT role, section, can_view, can_add, can_edit, can_delete, can_export FROM permissions")
+
+
+def can(section: str, action: str, role: str) -> bool:
+    if role == ROLE_SUPERADMIN:
+        return True
+    perms = load_permissions()
+    sub = perms[(perms["role"] == role) & (perms["section"].isin([section, "*"]))]
+    if len(sub) == 0:
+        return action == "view"
+    spec = sub[sub["section"] == section]
+    row = (spec.iloc[0] if len(spec) else sub.iloc[0]).to_dict()
+    return bool(row.get(f"can_{action}", 0))
+
+
+def page_title(title: str, subtitle: str):
+    st.markdown(
+        f"<div class='card'><div class='section'>{title}</div><div class='small'>{subtitle}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def kpi(label, value):
+    st.markdown(
+        f"<div class='kpi'><div class='label'>{label}</div><div class='val'>{value}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def bootstrap_if_no_users():
+    c = int(qdf("SELECT COUNT(*) AS c FROM users").iloc[0]["c"] or 0)
+    if c > 0:
+        return
+
+    st.warning("No users found. Create the first SuperAdmin below (one-time).")
+    with st.form("bootstrap_admin"):
+        u = st.text_input("Admin Username", value="admin")
+        p = st.text_input("Admin Password", type="password")
+        mode = st.selectbox("Password mode", ["Secure (recommended)", "Simple (plain$)"], index=0)
+        ok = st.form_submit_button("Create SuperAdmin", type="primary")
+    if ok:
+        if not u.strip() or not p:
+            st.error("Username and password required.")
+            st.stop()
+        if mode.startswith("Secure"):
+            ph = pbkdf2_hash(p)
+        else:
+            ph = "plain$" + p  # easy first-time, can upgrade later
+        exec_sql(
+            """
+            INSERT INTO users(username,password_hash,role,section_scope,is_active)
+            VALUES(:u,:p,:r,'Both',1)
+            """,
+            {"u": u.strip(), "p": ph, "r": ROLE_SUPERADMIN},
+        )
+        audit(u.strip(), "BOOTSTRAP_ADMIN", "created first SuperAdmin")
+        st.success("SuperAdmin created. Please refresh and login.")
+        st.stop()
+
+
+bootstrap_if_no_users()
+
+
+def require_auth():
+    if "auth" in st.session_state:
+        return
+
+    with st.sidebar:
+        st.markdown("### 🔐 Login")
+        u = st.text_input("Username").strip()
+        p = st.text_input("Password", type="password")
+        if st.button("Login", type="primary"):
+            row = get_user(u)
+            if row and int(row.get("is_active", 0) or 0) == 1 and pbkdf2_verify(p, row["password_hash"]):
+                st.session_state["auth"] = {"user": row["username"], "role": row["role"], "scope": row["section_scope"]}
+                set_last_login(row["username"])
+                audit(row["username"], "LOGIN", f"role={row['role']} scope={row['section_scope']}")
+                st.rerun()
+            st.error("Invalid credentials or disabled account.")
+        st.stop()
+
+
+require_auth()
+AUTH = st.session_state["auth"]
+USER = AUTH["user"]
+ROLE = AUTH["role"]
+SCOPE = AUTH.get("scope", SCOPE_BOTH)
+
+
+# =========================================================
+# DATA HELPERS
+# =========================================================
+@st.cache_data(show_spinner=False)
+def read_leads_file(upload=None) -> pd.DataFrame:
+    if upload is None:
+        if not os.path.exists(DATA_FILE):
+            st.error(f"Missing {DATA_FILE}. Put it in the same folder as app.py")
+            st.stop()
+        df = pd.read_csv(DATA_FILE, encoding="utf-8-sig", low_memory=False)
+    else:
+        name = upload.name.lower()
+        if name.endswith(".csv"):
+            df = pd.read_csv(upload, encoding="utf-8-sig", low_memory=False)
+        else:
+            xl = pd.ExcelFile(upload)
+            sheet = st.selectbox("Sheet", xl.sheet_names)
+            df = pd.read_excel(upload, sheet_name=sheet)
+
+    df.columns = [c.strip() for c in df.columns]
+    if "District Type" in df.columns and "City" not in df.columns:
+        df = df.rename(columns={"District Type": "City"})
+    return df
+
+
 def norm(x):
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return ""
@@ -489,44 +552,9 @@ def whatsapp_url(mobile, message):
     return f"https://wa.me/91{m}?text={quote_plus(message)}"
 
 
-def kpi(label, value):
-    st.markdown(
-        f"<div class='kpi'><div class='label'>{label}</div><div class='val'>{value}</div></div>",
-        unsafe_allow_html=True,
-    )
-
-
-def page_title(title, subtitle):
-    st.markdown(
-        f"<div class='card'><div class='section'>{title}</div><div class='small'>{subtitle}</div></div>",
-        unsafe_allow_html=True,
-    )
-
-
-# ---------------- Load Leads (CSV / Excel Upload) ----------------
-@st.cache_data(show_spinner=False)
-def read_leads_file(upload=None):
-    if upload is None:
-        if not os.path.exists(DATA_FILE):
-            st.error(f"Missing {DATA_FILE}. Put it in same folder as app.py")
-            st.stop()
-        df = pd.read_csv(DATA_FILE, encoding="utf-8-sig", low_memory=False)
-    else:
-        name = upload.name.lower()
-        if name.endswith(".csv"):
-            df = pd.read_csv(upload, encoding="utf-8-sig", low_memory=False)
-        else:
-            xl = pd.ExcelFile(upload)
-            sheet = st.selectbox("Sheet", xl.sheet_names)
-            df = pd.read_excel(upload, sheet_name=sheet)
-
-    df.columns = [c.strip() for c in df.columns]
-    if "District Type" in df.columns and "City" not in df.columns:
-        df = df.rename(columns={"District Type": "City"})
-    return df
-
-
-# ---------------- Property Codes ----------------
+# =========================================================
+# PROPERTY CODES
+# =========================================================
 def _letters2(x):
     x = re.sub(r"[^A-Za-z]", "", (x or "").upper())
     return (x + "XX")[:2]
@@ -537,7 +565,11 @@ def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
     needed.columns = ["property_id", "district", "city", "property_name"]
 
     existing = qdf("SELECT property_id, property_code FROM property_codes")
-    existing_map = dict(zip(existing["property_id"].astype("string"), existing["property_code"].astype("string"))) if len(existing) else {}
+    existing_map = (
+        dict(zip(existing["property_id"].astype("string"), existing["property_code"].astype("string")))
+        if len(existing)
+        else {}
+    )
 
     rows_to_insert = []
     for r in needed.to_dict("records"):
@@ -559,19 +591,25 @@ def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
                 code = f"{prefix}{uuid.uuid4().hex[:3].upper()}"
                 break
 
-        rows_to_insert.append({
-            "property_id": pid,
-            "property_code": code,
-            "district": r.get("district", ""),
-            "city": r.get("city", ""),
-            "property_name": r.get("property_name", "")
-        })
+        rows_to_insert.append(
+            {
+                "property_id": pid,
+                "property_code": code,
+                "district": r.get("district", ""),
+                "city": r.get("city", ""),
+                "property_name": r.get("property_name", ""),
+            }
+        )
 
     for row in rows_to_insert:
-        exec_sql("""
+        exec_sql(
+            """
             INSERT INTO property_codes(property_id,property_code,district,city,property_name)
             VALUES(:property_id,:property_code,:district,:city,:property_name)
-        """, row)
+            ON CONFLICT(property_id) DO NOTHING
+            """,
+            row,
+        )
 
     return qdf("SELECT property_id, property_code FROM property_codes")
 
@@ -587,134 +625,17 @@ def property_display_map(code_df, leads_df):
     return out
 
 
-# ---------------- Auth + Permissions ----------------
-def get_user(username):
-    df = qdf("SELECT * FROM users WHERE username=:u", {"u": username})
-    return df.iloc[0].to_dict() if len(df) else None
-
-
-def set_last_login(username):
-    exec_sql("UPDATE users SET last_login_at=NOW(), updated_at=NOW() WHERE username=:u", {"u": username})
-
-
-@st.cache_data(show_spinner=False)
-def load_permissions():
-    return qdf("SELECT role, section, can_view, can_add, can_edit, can_delete, can_export FROM permissions")
-
-
-def can(section: str, action: str, role: str) -> bool:
-    if role == ROLE_SUPERADMIN:
-        return True
-    perms = load_permissions()
-    sub = perms[(perms["role"] == role) & (perms["section"].isin([section, "*"]))]
-    if len(sub) == 0:
-        return action == "view" and role == ROLE_VIEWER
-    spec = sub[sub["section"] == section]
-    row = (spec.iloc[0] if len(spec) else sub.iloc[0]).to_dict()
-    return bool(row.get(f"can_{action}", 0))
-
-
-def first_time_setup_if_no_users():
-    try:
-        c = int(qdf("SELECT COUNT(*) AS c FROM users").iloc[0]["c"] or 0)
-    except Exception:
-        c = 0
-
-    if c > 0:
-        return
-
-    st.title("🛠 First-time Setup: Create SuperAdmin")
-    st.info("No users found in database. Create the first SuperAdmin here.")
-    with st.form("first_admin"):
-        u = st.text_input("Admin Username", value="admin")
-        p = st.text_input("Admin Password", type="password")
-        ok = st.form_submit_button("Create SuperAdmin", type="primary")
-    if ok:
-        if not u.strip() or not p:
-            st.error("Username and password required.")
-            st.stop()
-
-        exec_sql("""
-            INSERT INTO users(username,password_hash,role,section_scope,is_active)
-            VALUES(:u,:p,:r,'Both',1)
-        """, {"u": u.strip(), "p": pbkdf2_hash(p), "r": ROLE_SUPERADMIN})
-        seed_permissions_once()
-        st.success("SuperAdmin created. Please refresh and login.")
-        st.stop()
-
-    st.stop()
-
-
-def require_auth():
-    first_time_setup_if_no_users()
-
-    if "auth" in st.session_state:
-        return
-
-    st.sidebar.markdown("### 🔐 Login")
-    u = st.sidebar.text_input("Username").strip()
-    p = st.sidebar.text_input("Password", type="password")
-    if st.sidebar.button("Login", type="primary"):
-        row = get_user(u)
-        if row and int(row.get("is_active", 0) or 0) == 1 and pbkdf2_verify(p, row["password_hash"]):
-            st.session_state["auth"] = {"user": row["username"], "role": row["role"], "scope": row["section_scope"]}
-            set_last_login(row["username"])
-            audit(row["username"], "LOGIN", f"role={row['role']} scope={row['section_scope']}")
-            st.rerun()
-        st.sidebar.error("Invalid credentials or disabled account.")
-        st.stop()
-
-    st.sidebar.caption("If this is your first time, the app will ask to create SuperAdmin automatically.")
-    st.stop()
-
-
-require_auth()
-AUTH = st.session_state["auth"]
-USER = AUTH["user"]
-ROLE = AUTH["role"]
-SCOPE = AUTH.get("scope", SCOPE_BOTH)
-
-
-# ---------------- Company settings & user profile ----------------
-def get_company_settings():
-    df = qdf("SELECT * FROM company_settings_v1 LIMIT 1")
-    if len(df) == 0:
-        sid = str(uuid.uuid4())
-        exec_sql("INSERT INTO company_settings_v1(settings_id, gst_no, bank_details, whatsapp_limit_per_hour) VALUES(:i,'','',50)", {"i": sid})
-        df = qdf("SELECT * FROM company_settings_v1 LIMIT 1")
-    return df.iloc[0].to_dict()
-
-
-def upsert_company_settings(gst_no: str, bank_details: str, limit_per_hour: int):
-    cur = get_company_settings()
-    exec_sql("""
-        UPDATE company_settings_v1
-        SET gst_no=:g, bank_details=:b, whatsapp_limit_per_hour=:l, updated_at=NOW()
-        WHERE settings_id=:id
-    """, {"g": gst_no, "b": bank_details, "l": int(limit_per_hour), "id": cur["settings_id"]})
-
-
-def get_user_profile(username: str):
-    df = qdf("SELECT * FROM user_profiles_v1 WHERE username=:u", {"u": username})
-    if len(df) == 0:
-        exec_sql("INSERT INTO user_profiles_v1(username, signature_filename, designation, mobile, email) VALUES(:u,'','','','')", {"u": username})
-        df = qdf("SELECT * FROM user_profiles_v1 WHERE username=:u", {"u": username})
-    return df.iloc[0].to_dict()
-
-
-def update_user_signature(username: str, filename: str):
-    exec_sql("UPDATE user_profiles_v1 SET signature_filename=:f, updated_at=NOW() WHERE username=:u", {"u": username, "f": filename})
-
-
-# ---------------- Lead updates ----------------
+# =========================================================
+# LEAD UPDATES
+# =========================================================
 def list_lead_updates(section):
-    return qdf("SELECT * FROM lead_updates_v1 WHERE section=:s", {"s": section})
+    return qdf("SELECT * FROM lead_updates WHERE section=:s", {"s": section})
 
 
 def upsert_lead_update(section, record_hash, status, assigned_to, lead_source, notes, follow_up, last_call_outcome=None):
     exec_sql(
         """
-        INSERT INTO lead_updates_v1(record_hash,section,status,assigned_to,lead_source,notes,follow_up,last_call_outcome,last_call_at,last_updated)
+        INSERT INTO lead_updates(record_hash,section,status,assigned_to,lead_source,notes,follow_up,last_call_outcome,last_call_at,last_updated)
         VALUES(:h,:s,:st,:as,:src,:n,:fu,:out,CASE WHEN :out IS NULL THEN NULL ELSE NOW() END,NOW())
         ON CONFLICT(record_hash, section) DO UPDATE SET
           status=EXCLUDED.status,
@@ -722,22 +643,55 @@ def upsert_lead_update(section, record_hash, status, assigned_to, lead_source, n
           lead_source=EXCLUDED.lead_source,
           notes=EXCLUDED.notes,
           follow_up=EXCLUDED.follow_up,
-          last_call_outcome=COALESCE(EXCLUDED.last_call_outcome, lead_updates_v1.last_call_outcome),
-          last_call_at=CASE WHEN EXCLUDED.last_call_outcome IS NULL THEN lead_updates_v1.last_call_at ELSE NOW() END,
+          last_call_outcome=COALESCE(EXCLUDED.last_call_outcome, lead_updates.last_call_outcome),
+          last_call_at=CASE WHEN EXCLUDED.last_call_outcome IS NULL THEN lead_updates.last_call_at ELSE NOW() END,
           last_updated=NOW()
         """,
         {"h": record_hash, "s": section, "st": status, "as": assigned_to, "src": lead_source, "n": notes, "fu": follow_up, "out": last_call_outcome},
     )
 
 
-# ---------------- PDF Proposals (ReportLab, cloud-safe) ----------------
-from io import BytesIO
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
+# =========================================================
+# SETTINGS / PROFILES
+# =========================================================
+def get_company_settings():
+    df = qdf("SELECT * FROM company_settings LIMIT 1")
+    if len(df) == 0:
+        sid = str(uuid.uuid4())
+        exec_sql("INSERT INTO company_settings(settings_id, gst_no, bank_details, whatsapp_limit_per_hour) VALUES(:i,'','',50)", {"i": sid})
+        df = qdf("SELECT * FROM company_settings LIMIT 1")
+    return df.iloc[0].to_dict()
 
 
+def upsert_company_settings(gst_no: str, bank_details: str, limit_per_hour: int):
+    cur = get_company_settings()
+    exec_sql(
+        """
+        UPDATE company_settings
+        SET gst_no=:g, bank_details=:b, whatsapp_limit_per_hour=:l, updated_at=NOW()
+        WHERE settings_id=:id
+        """,
+        {"g": gst_no, "b": bank_details, "l": int(limit_per_hour), "id": cur["settings_id"]},
+    )
+
+
+def get_user_profile(username: str):
+    df = qdf("SELECT * FROM user_profiles WHERE username=:u", {"u": username})
+    if len(df) == 0:
+        exec_sql("INSERT INTO user_profiles(username, signature_filename, designation, mobile, email) VALUES(:u,'','','','')", {"u": username})
+        df = qdf("SELECT * FROM user_profiles WHERE username=:u", {"u": username})
+    return df.iloc[0].to_dict()
+
+
+def update_user_signature(username: str, filename: str):
+    exec_sql("UPDATE user_profiles SET signature_filename=:f, updated_at=NOW() WHERE username=:u", {"u": username, "f": filename})
+
+
+# =========================================================
+# PDF PROPOSAL (REPORTLAB)
+# =========================================================
 def next_proposal_no():
-    df = qdf("SELECT MAX(proposal_no) AS m FROM proposals_v1")
+    df = qdf("SELECT MAX(proposal_no) AS m FROM proposals")
     m = df.iloc[0]["m"]
     return int(m or 0) + 1
 
@@ -756,7 +710,7 @@ def make_proposal_pdf_bytes(section: str, data: dict, settings: dict, signer: di
             c.showPage()
             y = height - 40
         c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-        c.drawString(left, y, str(txt)[:160])
+        c.drawString(left, y, str(txt)[:140])
         y -= gap
 
     def hr(gap=14):
@@ -767,12 +721,12 @@ def make_proposal_pdf_bytes(section: str, data: dict, settings: dict, signer: di
     line("The Adbook Outdoor", 16, True, 22)
     line(WEBSITE_URL, 10, False, 14)
 
-    proposal_no = data.get("proposal_no", "")
+    pno = data.get("proposal_no", "")
     today = date.today().strftime("%d-%b-%Y")
     valid_till = (date.today() + timedelta(days=validity_days)).strftime("%d-%b-%Y")
 
     c.setFont("Helvetica", 10)
-    c.drawRightString(width - left, height - 40, f"Proposal No: {proposal_no}")
+    c.drawRightString(width - left, height - 40, f"Proposal No: {pno}")
     c.drawRightString(width - left, height - 54, f"Date: {today}")
     c.drawRightString(width - left, height - 68, f"Valid till: {valid_till}")
 
@@ -781,8 +735,8 @@ def make_proposal_pdf_bytes(section: str, data: dict, settings: dict, signer: di
     title = "Installation Proposal" if section == SECTION_INSTALL else "Advertisement Proposal"
     line(title, 13, True, 18)
 
-    line("Property / Client Details", 11, True, 16)
-    line(f"Name: {data.get('property_name','')}", 11, False, 14)
+    line("Property Details", 11, True, 16)
+    line(f"Property: {data.get('property_name','')}", 11, False, 14)
     line(f"Address: {data.get('property_address','')}", 11, False, 14)
     line(f"District/City: {data.get('district','')} / {data.get('city','')}", 11, False, 14)
     line(f"Contact: {data.get('contact_person','')} | {data.get('contact_phone','')} | {data.get('contact_email','')}", 11, False, 16)
@@ -790,7 +744,8 @@ def make_proposal_pdf_bytes(section: str, data: dict, settings: dict, signer: di
     hr()
 
     line("Scope", 11, True, 16)
-    for s in (data.get("scope_points", []) or ["Scope to be finalized."]):
+    scope_points = data.get("scope_points", []) or []
+    for s in (scope_points or ["Scope to be finalized."]):
         line(f"• {s}", 11, False, 14)
 
     hr()
@@ -805,27 +760,22 @@ def make_proposal_pdf_bytes(section: str, data: dict, settings: dict, signer: di
 
     hr()
 
-    line("Timeline", 11, True, 16)
-    for t in (data.get("timeline_points", []) or ["Timeline to be finalized."]):
-        line(f"• {t}", 11, False, 14)
-
-    hr()
-
     line("Payment Terms", 11, True, 16)
-    for p in (data.get("payment_terms", []) or ["Payment terms to be finalized."]):
+    payment_terms = data.get("payment_terms", []) or []
+    for p in (payment_terms or ["Payment terms to be finalized."]):
         line(f"• {p}", 11, False, 14)
 
     hr()
 
     line("GST", 11, True, 16)
-    line(settings.get("gst_no", "Applicable as per rules.") or "Applicable as per rules.", 11, False, 16)
+    line(settings.get("gst_no", "") or "Applicable as per rules.", 11, False, 16)
 
     line("Bank Details", 11, True, 16)
-    bank_details = (settings.get("bank_details", "") or "").strip()
-    if not bank_details:
+    bank = (settings.get("bank_details", "") or "").strip()
+    if not bank:
         line("Will be shared on request.", 11, False, 14)
     else:
-        for bl in bank_details.splitlines():
+        for bl in bank.splitlines():
             line(bl, 11, False, 14)
 
     hr()
@@ -835,47 +785,32 @@ def make_proposal_pdf_bytes(section: str, data: dict, settings: dict, signer: di
     line(f"Designation: {signer.get('designation','')}", 11, False, 14)
 
     c.setFont("Helvetica", 9)
-    c.drawString(left, 30, "System-generated proposal (AIAMS).")
+    c.drawString(left, 30, "This proposal is system-generated by AIAMS (cloud-safe PDF).")
 
     c.save()
     return buffer.getvalue()
 
 
-def save_proposal_pdf(section: str, property_id: str, advertiser_id: str | None, pdf_bytes: bytes, created_by: str) -> dict:
+def save_proposal_pdf(section: str, property_id: str, pdf_bytes: bytes, created_by: str) -> dict:
     pno = next_proposal_no()
     fname = f"proposal_{section.lower()}_{pno}_{uuid.uuid4().hex}.pdf"
-    folder = UPLOAD_INSTALL if section == SECTION_INSTALL else UPLOAD_ADS
-    path = os.path.join(folder, fname)
+    path = os.path.join(UPLOAD_INSTALL, fname)
     with open(path, "wb") as f:
         f.write(pdf_bytes)
 
-    exec_sql("""
-        INSERT INTO proposals_v1(proposal_id, section, property_id, advertiser_id, proposal_no, created_by, pdf_filename, status)
-        VALUES(:id,:sec,:pid,:aid,:pno,:by,:fn,'Generated')
-    """, {
-        "id": str(uuid.uuid4()),
-        "sec": section,
-        "pid": property_id,
-        "aid": advertiser_id or "",
-        "pno": int(pno),
-        "by": created_by,
-        "fn": fname
-    })
-
+    exec_sql(
+        """
+        INSERT INTO proposals(proposal_id, section, property_id, proposal_no, created_by, pdf_filename, status)
+        VALUES(:id,:sec,:pid,:pno,:by,:fn,'Generated')
+        """,
+        {"id": str(uuid.uuid4()), "sec": section, "pid": property_id, "pno": int(pno), "by": created_by, "fn": fname},
+    )
     return {"proposal_no": pno, "filename": fname, "path": path}
 
 
-# ---------------- WhatsApp limit ----------------
-def whatsapp_rate_ok(username: str, limit_per_hour: int) -> bool:
-    df = qdf(
-        "SELECT COUNT(*) AS c FROM whatsapp_logs_v1 WHERE username=:u AND created_at >= (NOW() - INTERVAL '1 hour')",
-        {"u": username},
-    )
-    c = int(df.iloc[0]["c"] or 0)
-    return c < int(limit_per_hour)
-
-
-# ---------------- Sidebar ----------------
+# =========================================================
+# SIDEBAR NAV
+# =========================================================
 with st.sidebar:
     st.markdown("### AIAMS")
     st.markdown(f"**User:** {USER}")
@@ -892,15 +827,18 @@ with st.sidebar:
     allowed_sections = [SECTION_INSTALL, SECTION_ADS] if SCOPE == SCOPE_BOTH else [SCOPE]
     SECTION = st.radio("Module", allowed_sections, horizontal=True)
 
-    MENU_INSTALL = ["Home", "Leads", "Inventory", "Screens", "Service Center", "Documents", "Agreements", "Billing", "Proposals", "WhatsApp", "Reports"]
-    MENU_ADS = ["Home", "Leads", "Advertisers", "Allotments", "Agreements", "Billing", "Documents", "Proposals", "WhatsApp", "Reports"]
+    MENU_INSTALL = ["Home", "Leads", "Inventory", "Screens", "Documents", "Proposals", "WhatsApp", "Reports"]
+    MENU_ADS = ["Home", "Leads", "WhatsApp", "Reports"]
     menu = MENU_INSTALL if SECTION == SECTION_INSTALL else MENU_ADS
     if ROLE == ROLE_SUPERADMIN:
         menu = menu + ["Admin Panel"]
+
     PAGE = st.selectbox("Page", menu)
 
 
-# ---------------- Load leads ----------------
+# =========================================================
+# LOAD LEADS + HASHES
+# =========================================================
 leads_df = read_leads_file(upload).copy()
 
 for col in ["District", "City", "Property Name", "Property Address", "Promoter Mobile Number", "Promoter Email", "Promoter / Developer Name"]:
@@ -909,8 +847,12 @@ for col in ["District", "City", "Property Name", "Property Address", "Promoter M
 
 leads_df["__hash"] = [
     make_hash(
-        norm(r.get("Property Name")), norm(r.get("Property Address")), norm(r.get("District")), norm(r.get("City")),
-        normalize_mobile(r.get("Promoter Mobile Number")), norm(r.get("Promoter Email"))
+        norm(r.get("Property Name")),
+        norm(r.get("Property Address")),
+        norm(r.get("District")),
+        norm(r.get("City")),
+        normalize_mobile(r.get("Promoter Mobile Number")),
+        norm(r.get("Promoter Email")),
     )
     for r in leads_df.to_dict("records")
 ]
@@ -921,29 +863,36 @@ pid_to_code = dict(zip(codes_df["property_id"].astype("string"), codes_df["prope
 
 upd = list_lead_updates(SECTION)
 leads_df = leads_df.merge(upd, left_on="__hash", right_on="record_hash", how="left")
+
 leads_df["status"] = leads_df["status"].fillna("New")
 leads_df["assigned_to"] = leads_df["assigned_to"].fillna("")
 leads_df["lead_source"] = leads_df["lead_source"].fillna("Cold Call")
 leads_df["notes"] = leads_df["notes"].fillna("")
 leads_df["follow_up"] = leads_df["follow_up"].fillna("")
 
+# field/viewer: only own assigned
 if ROLE in [ROLE_INSTALL_FIELD, ROLE_ADS_FIELD, ROLE_VIEWER]:
     leads_df = leads_df[leads_df["assigned_to"].astype("string") == USER]
 
-
-# KPIs
+# KPIs header
 st.markdown("<div class='sticky-wrap'>", unsafe_allow_html=True)
 c1, c2, c3, c4 = st.columns(4)
-with c1: kpi("Leads", f"{len(leads_df):,}")
-with c2: kpi("New", f"{int((leads_df['status'] == 'New').sum()):,}")
-with c3: kpi("Follow-up", f"{int((leads_df['status'] == 'Follow-up Required').sum()):,}")
-with c4: kpi("Interested", f"{int((leads_df['status'] == 'Interested').sum()):,}")
+with c1:
+    kpi("Leads", f"{len(leads_df):,}")
+with c2:
+    kpi("New", f"{int((leads_df['status'] == 'New').sum()):,}")
+with c3:
+    kpi("Follow-up", f"{int((leads_df['status'] == 'Follow-up Required').sum()):,}")
+with c4:
+    kpi("Interested", f"{int((leads_df['status'] == 'Interested').sum()):,}")
 st.markdown("</div>", unsafe_allow_html=True)
 
 
-# ---------------- Pages ----------------
+# =========================================================
+# PAGES
+# =========================================================
 if PAGE == "Home":
-    page_title("🏠 Home (Search)", f"{SECTION}: search properties and contact quickly.")
+    page_title("🏠 Home (Search)", f"{SECTION}: Search properties and contact quickly.")
     q = st.text_input("Search (Property / Promoter / Phone / Email)")
     df = leads_df.copy()
     if q.strip():
@@ -954,16 +903,18 @@ if PAGE == "Home":
             mask |= df[c].astype("string").fillna("").str.lower().str.contains(re.escape(s), na=False)
         df = df[mask]
     st.dataframe(
-        df[["District", "City", "Property Name", "Promoter / Developer Name", "Promoter Mobile Number", "Promoter Email", "status", "assigned_to", "follow_up"]].head(500),
+        df[["District", "City", "Property Name", "Promoter / Developer Name", "Promoter Mobile Number", "Promoter Email", "status", "assigned_to", "follow_up"]].head(1000),
         use_container_width=True,
-        height=520,
+        height=560,
     )
 
 elif PAGE == "Leads":
     page_title("🧩 Leads (Update Status)", "Open one lead and update status, notes, follow-up.")
+    if not can(SECTION, "edit", ROLE):
+        st.info("Read-only for your role.")
+
     df = leads_df.drop_duplicates("__hash").copy()
     df["display"] = df["__hash"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
-
     sel = st.selectbox("Select lead", df["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
     pid = str(rev.get(sel))
@@ -974,12 +925,15 @@ elif PAGE == "Leads":
 
     c1, c2 = st.columns(2)
     with c1:
-        status = st.selectbox("Status", LEAD_STATUS, index=LEAD_STATUS.index(row.get("status", "New")) if row.get("status", "New") in LEAD_STATUS else 0)
+        status = st.selectbox(
+            "Status",
+            LEAD_STATUS,
+            index=LEAD_STATUS.index(row.get("status", "New")) if row.get("status", "New") in LEAD_STATUS else 0,
+        )
         assigned = st.text_input("Assigned to", value=row.get("assigned_to", ""))
     with c2:
         outcome = st.selectbox("Last call outcome (optional)", [""] + CALL_OUTCOMES, index=0)
         follow = st.text_input("Follow-up (date/note)", value=row.get("follow_up", ""))
-
     notes = st.text_area("Notes", value=row.get("notes", ""), height=120)
 
     if st.button("✅ Save Update", type="primary", disabled=not can(SECTION, "edit", ROLE)):
@@ -997,13 +951,12 @@ elif PAGE == "Inventory":
     page_title("🗂 Inventory (Sites)", "Save installed site info.")
     base = leads_df.drop_duplicates("__hash").copy()
     base["display"] = base["__hash"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
-
     sel = st.selectbox("Select property", base["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
     pid = str(rev.get(sel))
     lead = base[base["__hash"].astype("string") == pid].iloc[0].to_dict()
 
-    ex = qdf("SELECT * FROM inventory_sites_v1 WHERE property_id=:p", {"p": pid})
+    ex = qdf("SELECT * FROM inventory_sites WHERE property_id=:p", {"p": pid})
     ex = ex.iloc[0].to_dict() if len(ex) else {}
 
     with st.form("inv_form"):
@@ -1022,44 +975,47 @@ elif PAGE == "Inventory":
         lat = st.text_input("Latitude", value=str(ex.get("latitude") or ""))
         lon = st.text_input("Longitude", value=str(ex.get("longitude") or ""))
         rent = st.number_input("Agreed rent per month (₹)", min_value=0.0, value=float(ex.get("agreed_rent_pm") or 0.0))
-        notes = st.text_area("Notes", value=ex.get("notes", ""), height=100)
+        inv_notes = st.text_area("Notes", value=ex.get("notes", ""), height=100)
 
         ok = st.form_submit_button("Save", type="primary", disabled=not can(SECTION_INSTALL, "edit", ROLE))
 
     if ok:
-        exec_sql("""
-        INSERT INTO inventory_sites_v1(
-          property_id, property_code, district, city, property_name, property_address,
-          latitude, longitude, date_of_contract, contract_period, screen_installed_date,
-          site_rating, chairman_name, contact_person, contact_details, agreed_rent_pm, notes, last_updated
+        exec_sql(
+            """
+            INSERT INTO inventory_sites(
+              property_id, property_code, district, city, property_name, property_address,
+              latitude, longitude, date_of_contract, contract_period, screen_installed_date,
+              site_rating, chairman_name, contact_person, contact_details, agreed_rent_pm, notes, last_updated
+            )
+            VALUES(:pid,:pc,:d,:c,:pn,:pa,:lat,:lon,:doc,:cp,:sid,:sr,:ch,:pp,:cd,:rent,:notes,NOW())
+            ON CONFLICT(property_id) DO UPDATE SET
+              latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude,
+              date_of_contract=EXCLUDED.date_of_contract, contract_period=EXCLUDED.contract_period,
+              screen_installed_date=EXCLUDED.screen_installed_date,
+              site_rating=EXCLUDED.site_rating, chairman_name=EXCLUDED.chairman_name,
+              contact_person=EXCLUDED.contact_person, contact_details=EXCLUDED.contact_details,
+              agreed_rent_pm=EXCLUDED.agreed_rent_pm, notes=EXCLUDED.notes, last_updated=NOW()
+            """,
+            {
+                "pid": pid,
+                "pc": pid_to_code.get(pid, pid[:6].upper()),
+                "d": lead.get("District", ""),
+                "c": lead.get("City", ""),
+                "pn": lead.get("Property Name", ""),
+                "pa": lead.get("Property Address", ""),
+                "lat": float(lat) if str(lat).strip() else None,
+                "lon": float(lon) if str(lon).strip() else None,
+                "doc": date_of_contract,
+                "cp": contract_period,
+                "sid": screen_installed_date,
+                "sr": int(site_rating),
+                "ch": chairman,
+                "pp": contact_person,
+                "cd": contact_details,
+                "rent": float(rent),
+                "notes": inv_notes,
+            },
         )
-        VALUES(:pid,:pc,:d,:c,:pn,:pa,:lat,:lon,:doc,:cp,:sid,:sr,:ch,:pp,:cd,:rent,:notes,NOW())
-        ON CONFLICT(property_id) DO UPDATE SET
-          latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude,
-          date_of_contract=EXCLUDED.date_of_contract, contract_period=EXCLUDED.contract_period,
-          screen_installed_date=EXCLUDED.screen_installed_date,
-          site_rating=EXCLUDED.site_rating, chairman_name=EXCLUDED.chairman_name,
-          contact_person=EXCLUDED.contact_person, contact_details=EXCLUDED.contact_details,
-          agreed_rent_pm=EXCLUDED.agreed_rent_pm, notes=EXCLUDED.notes, last_updated=NOW()
-        """, {
-            "pid": pid,
-            "pc": pid_to_code.get(pid, pid[:6].upper()),
-            "d": lead.get("District", ""),
-            "c": lead.get("City", ""),
-            "pn": lead.get("Property Name", ""),
-            "pa": lead.get("Property Address", ""),
-            "lat": float(lat) if str(lat).strip() else None,
-            "lon": float(lon) if str(lon).strip() else None,
-            "doc": date_of_contract,
-            "cp": contract_period,
-            "sid": screen_installed_date,
-            "sr": int(site_rating),
-            "ch": chairman,
-            "pp": contact_person,
-            "cd": contact_details,
-            "rent": float(rent),
-            "notes": notes
-        })
         audit(USER, "INVENTORY_SAVE", pid_to_code.get(pid, pid[:6]))
         st.success("Saved.")
         st.rerun()
@@ -1073,7 +1029,7 @@ elif PAGE == "Screens":
         st.stop()
 
     page_title("🖥 Screens", "Add screens for each site.")
-    inv = qdf("SELECT property_id, property_name FROM inventory_sites_v1 ORDER BY last_updated DESC")
+    inv = qdf("SELECT property_id FROM inventory_sites ORDER BY last_updated DESC")
     if len(inv) == 0:
         st.info("Create Inventory record first.")
         st.stop()
@@ -1094,200 +1050,80 @@ elif PAGE == "Screens":
         if not sid.strip():
             st.error("Screen ID required.")
         else:
-            exec_sql("""
-            INSERT INTO screens_v1(screen_id,property_id,screen_location,installed_date,installed_by,next_service_due,is_active,last_updated)
-            VALUES(:sid,:pid,:loc,:idate,:iby,:nd,1,NOW())
-            ON CONFLICT(screen_id) DO UPDATE SET
-              property_id=EXCLUDED.property_id,
-              screen_location=EXCLUDED.screen_location,
-              installed_date=EXCLUDED.installed_date,
-              installed_by=EXCLUDED.installed_by,
-              next_service_due=EXCLUDED.next_service_due,
-              is_active=1,
-              last_updated=NOW()
-            """, {"sid": sid.strip(), "pid": pid, "loc": loc, "idate": installed_date, "iby": USER, "nd": next_due})
+            exec_sql(
+                """
+                INSERT INTO screens(screen_id,property_id,screen_location,installed_date,installed_by,next_service_due,is_active,last_updated)
+                VALUES(:sid,:pid,:loc,:idate,:iby,:nd,1,NOW())
+                ON CONFLICT(screen_id) DO UPDATE SET
+                  property_id=EXCLUDED.property_id,
+                  screen_location=EXCLUDED.screen_location,
+                  installed_date=EXCLUDED.installed_date,
+                  installed_by=EXCLUDED.installed_by,
+                  next_service_due=EXCLUDED.next_service_due,
+                  is_active=1,
+                  last_updated=NOW()
+                """,
+                {"sid": sid.strip(), "pid": pid, "loc": loc, "idate": installed_date, "iby": USER, "nd": next_due},
+            )
             audit(USER, "SCREEN_SAVE", sid.strip())
             st.success("Saved.")
             st.rerun()
 
-    scr = qdf("SELECT * FROM screens_v1 WHERE property_id=:p AND is_active=1 ORDER BY last_updated DESC", {"p": pid})
+    scr = qdf("SELECT * FROM screens WHERE property_id=:p AND is_active=1 ORDER BY last_updated DESC", {"p": pid})
     st.dataframe(scr, use_container_width=True, height=520)
 
-elif PAGE == "Service Center":
-    if SECTION != SECTION_INSTALL:
-        st.error("Service Center is only for Installation module.")
-        st.stop()
-
-    page_title("🛠 Service Center", "Overdue and due this week.")
-    scr = qdf("SELECT * FROM screens_v1 WHERE is_active=1")
-    if len(scr) == 0:
-        st.info("No screens.")
-        st.stop()
-
-    scr = scr.copy()
-    scr["due_dt"] = pd.to_datetime(scr["next_service_due"], errors="coerce")
-    today_dt = pd.to_datetime(date.today())
-    overdue = scr[scr["due_dt"].notna() & (scr["due_dt"] < today_dt)]
-    due_week = scr[scr["due_dt"].notna() & (scr["due_dt"] >= today_dt) & (scr["due_dt"] <= today_dt + pd.Timedelta(days=7))]
-
-    a, b = st.columns(2)
-    with a: kpi("Overdue", len(overdue))
-    with b: kpi("Due 7 days", len(due_week))
-
-    st.markdown("### Overdue")
-    st.dataframe(overdue.drop(columns=["due_dt"]), use_container_width=True, height=250)
-    st.markdown("### Due in 7 days")
-    st.dataframe(due_week.drop(columns=["due_dt"]), use_container_width=True, height=250)
-
-    if can(SECTION_INSTALL, "edit", ROLE):
-        st.markdown("### Mark Serviced")
-        sid = st.selectbox("Screen ID", scr["screen_id"].astype("string").tolist())
-        last = st.text_input("Last service date (YYYY-MM-DD)", value=str(date.today()))
-        next_due = st.text_input("Next due date (YYYY-MM-DD)", value=str(date.today() + timedelta(days=30)))
-        if st.button("Mark serviced", type="primary"):
-            exec_sql("UPDATE screens_v1 SET last_service_date=:ls, next_service_due=:nd, last_updated=NOW() WHERE screen_id=:sid",
-                     {"ls": last, "nd": next_due, "sid": sid})
-            audit(USER, "SERVICE_MARK", sid)
-            st.success("Updated.")
-            st.rerun()
-
 elif PAGE == "Documents":
-    page_title("📄 Documents", "Upload and track documents.")
+    if SECTION != SECTION_INSTALL:
+        st.info("Documents are enabled for Installation in this build.")
+        st.stop()
 
-    if SECTION == SECTION_INSTALL:
-        # pick property from inventory
-        inv = qdf("SELECT property_id FROM inventory_sites_v1 ORDER BY last_updated DESC")
-        if len(inv) == 0:
-            st.info("Create Inventory record first.")
-            st.stop()
+    page_title("📄 Documents", "Upload and track Installation documents.")
+    inv = qdf("SELECT property_id FROM inventory_sites ORDER BY last_updated DESC")
+    if len(inv) == 0:
+        st.info("Create Inventory record first.")
+        st.stop()
 
-        inv["display"] = inv["property_id"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
-        sel = st.selectbox("Select site", inv["display"].tolist())
-        rev = {v: k for k, v in disp_map.items()}
-        pid = str(rev.get(sel))
-        pcode = pid_to_code.get(pid, pid[:6])
-
-        d_type = st.selectbox("Doc type", DOC_TYPES_INSTALL)
-        file = st.file_uploader("Upload (pdf/jpg/png)", type=["pdf", "jpg", "jpeg", "png"])
-        if st.button("Upload", type="primary", disabled=not can(SECTION_INSTALL, "add", ROLE)):
-            if not file:
-                st.error("Upload a file.")
-            else:
-                ext = file.name.split(".")[-1].lower()
-                fname = f"{pcode}_install_{uuid.uuid4().hex}.{ext}"
-                path = os.path.join(UPLOAD_INSTALL, fname)
-                with open(path, "wb") as fp:
-                    fp.write(file.getbuffer())
-                exec_sql("""
-                    INSERT INTO documents_v1(doc_id,section,property_id,advertiser_id,doc_type,filename,issue_date,expiry_date,uploaded_by)
-                    VALUES(:id,:sec,:p,:a,:t,:f,:i,:e,:u)
-                """, {"id": str(uuid.uuid4()), "sec": SECTION_INSTALL, "p": pid, "a": "", "t": d_type, "f": fname, "i": str(date.today()), "e": "", "u": USER})
-                audit(USER, "DOC_UPLOAD_INSTALL", f"{pcode} {d_type}")
-                st.success("Uploaded.")
-                st.rerun()
-
-        df = qdf("SELECT * FROM documents_v1 WHERE section=:s AND property_id=:p ORDER BY uploaded_at DESC", {"s": SECTION_INSTALL, "p": pid})
-        st.dataframe(df, use_container_width=True, height=520)
-
-    else:
-        st.info("For Ads documents, upload against an advertiser (use Advertisers page).")
-
-elif PAGE == "Agreements":
-    page_title("📑 Agreements", "Create agreements for Installation or Advertisement.")
-
-    # pick property/ad
-    base = leads_df.drop_duplicates("__hash").copy()
-    base["display"] = base["__hash"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
-    sel = st.selectbox("Select property", base["display"].tolist())
+    inv["display"] = inv["property_id"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
+    sel = st.selectbox("Select site", inv["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
     pid = str(rev.get(sel))
+    pcode = pid_to_code.get(pid, pid[:6])
 
-    advertiser_id = ""
-    if SECTION == SECTION_ADS:
-        ads = qdf("SELECT advertiser_id, company_name FROM advertisers_v1 ORDER BY created_at DESC")
-        if len(ads) == 0:
-            st.warning("Add advertisers first.")
+    d_type = st.selectbox("Doc type", DOC_TYPES_INSTALL)
+    file = st.file_uploader("Upload (pdf/jpg/png)", type=["pdf", "jpg", "jpeg", "png"])
+    if st.button("Upload", type="primary", disabled=not can(SECTION_INSTALL, "add", ROLE)):
+        if not file:
+            st.error("Upload a file.")
         else:
-            ads["display"] = ads["company_name"].fillna("").astype("string") + " — " + ads["advertiser_id"].astype("string").str[:6]
-            pick = st.selectbox("Select advertiser", ads["display"].tolist())
-            advertiser_id = str(ads[ads["display"] == pick].iloc[0]["advertiser_id"])
+            ext = file.name.split(".")[-1].lower()
+            fname = f"{pcode}_install_{uuid.uuid4().hex}.{ext}"
+            path = os.path.join(UPLOAD_INSTALL, fname)
+            with open(path, "wb") as fp:
+                fp.write(file.getbuffer())
 
-    with st.form("agr_form"):
-        title = st.text_input("Agreement title", value=f"{SECTION} Agreement")
-        start_date = st.text_input("Start date (YYYY-MM-DD)", value=str(date.today()))
-        end_date = st.text_input("End date (YYYY-MM-DD)", value=str(date.today() + timedelta(days=365)))
-        amount = st.number_input("Amount (₹)", min_value=0.0, value=0.0)
-        cycle = st.selectbox("Billing cycle", BILLING_CYCLES, index=1 if "Monthly" in BILLING_CYCLES else 0)
-        status = st.selectbox("Status", ["Active", "Draft", "Closed"], index=0)
-        notes = st.text_area("Notes", height=80)
-        ok = st.form_submit_button("Save agreement", type="primary", disabled=not can(SECTION, "add", ROLE))
-
-    if ok:
-        agr_id = str(uuid.uuid4())
-        exec_sql("""
-            INSERT INTO agreements_v1(agr_id,section,property_id,advertiser_id,title,start_date,end_date,amount,billing_cycle,status,notes,created_at,last_updated)
-            VALUES(:id,:sec,:pid,:aid,:t,:sd,:ed,:amt,:bc,:st,:n,NOW(),NOW())
-        """, {"id": agr_id, "sec": SECTION, "pid": pid, "aid": advertiser_id, "t": title, "sd": start_date, "ed": end_date, "amt": float(amount), "bc": cycle, "st": status, "n": notes})
-        audit(USER, "AGREEMENT_SAVE", f"{SECTION} agr={agr_id[:8]}")
-        st.success("Agreement saved.")
-
-    st.markdown("### Agreements list")
-    ag = qdf("SELECT * FROM agreements_v1 WHERE section=:s ORDER BY created_at DESC LIMIT 300", {"s": SECTION})
-    st.dataframe(ag, use_container_width=True, height=520)
-
-elif PAGE == "Billing":
-    page_title("💳 Billing", "Create payment dues and mark paid.")
-
-    ag = qdf("SELECT agr_id, title, amount, billing_cycle, status, property_id, advertiser_id FROM agreements_v1 WHERE section=:s ORDER BY created_at DESC", {"s": SECTION})
-    if len(ag) == 0:
-        st.info("Create an agreement first.")
-        st.stop()
-
-    ag["display"] = ag["title"].astype("string") + " — " + ag["agr_id"].astype("string").str[:8]
-    pick = st.selectbox("Select agreement", ag["display"].tolist())
-    agr_id = str(ag[ag["display"] == pick].iloc[0]["agr_id"])
-
-    st.markdown("### Add a due payment")
-    with st.form("pay_form"):
-        due_date = st.text_input("Due date (YYYY-MM-DD)", value=str(date.today() + timedelta(days=7)))
-        amount_due = st.number_input("Amount due (₹)", min_value=0.0, value=float(ag[ag["agr_id"] == agr_id].iloc[0]["amount"] or 0.0))
-        status = st.selectbox("Status", PAYMENT_STATUS, index=0)
-        mode = st.text_input("Mode (Cash/UPI/Bank/Online)", value="")
-        notes = st.text_area("Notes", height=60)
-        ok = st.form_submit_button("Add due", type="primary", disabled=not can(SECTION, "add", ROLE))
-
-    if ok:
-        exec_sql("""
-            INSERT INTO payments_v1(pay_id,agr_id,due_date,amount_due,status,paid_date,mode,notes,created_at,last_updated)
-            VALUES(:id,:agr,:dd,:amt,:st,:pd,:m,:n,NOW(),NOW())
-        """, {"id": str(uuid.uuid4()), "agr": agr_id, "dd": due_date, "amt": float(amount_due), "st": status, "pd": "" if status != "Paid" else str(date.today()), "m": mode, "n": notes})
-        audit(USER, "PAYMENT_ADD", f"agr={agr_id[:8]} due={due_date}")
-        st.success("Payment added.")
-        st.rerun()
-
-    st.markdown("### Payments")
-    pay = qdf("SELECT * FROM payments_v1 WHERE agr_id=:a ORDER BY created_at DESC", {"a": agr_id})
-    st.dataframe(pay, use_container_width=True, height=420)
-
-    if len(pay) and can(SECTION, "edit", ROLE):
-        st.markdown("### Mark payment as PAID")
-        pay["pick"] = pay["pay_id"].astype("string").str[:8] + " | " + pay["due_date"].astype("string") + " | ₹" + pay["amount_due"].astype("string")
-        psel = st.selectbox("Select payment", pay["pick"].tolist())
-        pay_id = str(pay[pay["pick"] == psel].iloc[0]["pay_id"])
-        paid_date = st.text_input("Paid date (YYYY-MM-DD)", value=str(date.today()))
-        mode2 = st.text_input("Mode", value="UPI")
-        if st.button("✅ Mark Paid", type="primary"):
-            exec_sql("""
-                UPDATE payments_v1 SET status='Paid', paid_date=:pd, mode=:m, last_updated=NOW() WHERE pay_id=:id
-            """, {"pd": paid_date, "m": mode2, "id": pay_id})
-            audit(USER, "PAYMENT_PAID", pay_id[:8])
-            st.success("Updated.")
+            exec_sql(
+                """
+                INSERT INTO documents_install(doc_id,property_id,doc_type,filename,issue_date,expiry_date,uploaded_by)
+                VALUES(:id,:p,:t,:f,:i,:e,:u)
+                """,
+                {"id": str(uuid.uuid4()), "p": pid, "t": d_type, "f": fname, "i": str(date.today()), "e": "", "u": USER},
+            )
+            audit(USER, "DOC_UPLOAD_INSTALL", f"{pcode} {d_type}")
+            st.success("Uploaded.")
             st.rerun()
 
+    df = qdf("SELECT * FROM documents_install WHERE property_id=:p ORDER BY uploaded_at DESC", {"p": pid})
+    st.dataframe(df, use_container_width=True, height=520)
+
 elif PAGE == "Proposals":
-    page_title("📄 Proposals", "Generate proposal PDF (Installation or Ads).")
+    if SECTION != SECTION_INSTALL:
+        st.info("Proposals are enabled for Installation in this build.")
+        st.stop()
+
+    page_title("📄 Proposals", "Generate proposal PDF (cloud-safe).")
     settings = get_company_settings()
-    signer = get_user_profile(USER) | {"username": USER}
+    signer_profile = get_user_profile(USER)
+    signer = {"username": USER, "designation": signer_profile.get("designation", "")}
 
     base = leads_df.drop_duplicates("__hash").copy()
     base["display"] = base["__hash"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
@@ -1296,11 +1132,12 @@ elif PAGE == "Proposals":
     pid = str(rev.get(sel))
     lead = base[base["__hash"].astype("string") == pid].iloc[0].to_dict()
 
-    inv = qdf("SELECT * FROM inventory_sites_v1 WHERE property_id=:p", {"p": pid})
+    inv = qdf("SELECT * FROM inventory_sites WHERE property_id=:p", {"p": pid})
     invr = inv.iloc[0].to_dict() if len(inv) else {}
+
     rent = float(invr.get("agreed_rent_pm") or 0)
 
-    if st.button("Generate Proposal PDF", type="primary", disabled=not can(SECTION, "add", ROLE)):
+    if st.button("Generate Installation Proposal PDF", type="primary", disabled=not can(SECTION_INSTALL, "add", ROLE)):
         data = {
             "proposal_no": next_proposal_no(),
             "property_name": lead.get("Property Name", ""),
@@ -1312,48 +1149,39 @@ elif PAGE == "Proposals":
             "contact_email": lead.get("Promoter Email", ""),
             "scope_points": [
                 "Site survey and feasibility confirmation",
-                "Installation / campaign execution as per agreed scope",
-                "Support and maintenance as per schedule",
+                "Installation of LED display screens as per agreed quantity",
+                "Basic maintenance support as per service schedule",
             ],
-            "pricing_rows": [{"item": "Agreed Rent/Amount", "amount": f"{rent:,.0f}" if rent else "", "notes": invr.get("contract_period", "")}],
-            "timeline_points": ["Execution within 7–15 working days after approvals"],
-            "payment_terms": ["Payable in advance as per billing cycle", "GST applicable as per rules"],
+            "pricing_rows": [{"item": "Agreed Rent (per month)", "amount": f"{rent:,.0f}" if rent else "", "notes": invr.get("contract_period", "")}],
+            "payment_terms": ["Monthly rent payable in advance", "GST applicable as per rules"],
         }
 
-        pdf = make_proposal_pdf_bytes(SECTION, data, settings, signer)
-        saved = save_proposal_pdf(SECTION, pid, None, pdf, USER)
+        pdf = make_proposal_pdf_bytes(SECTION_INSTALL, data, settings, signer)
+        saved = save_proposal_pdf(SECTION_INSTALL, pid, pdf, USER)
 
         st.success(f"Generated Proposal No {saved['proposal_no']}")
         st.download_button(
             "⬇️ Download PDF",
             data=pdf,
-            file_name=f"Proposal_{SECTION}_{saved['proposal_no']}.pdf",
+            file_name=f"Installation_Proposal_{saved['proposal_no']}.pdf",
             mime="application/pdf",
             use_container_width=True,
         )
 
     st.markdown("---")
-    hist = qdf("SELECT section, proposal_no, property_id, advertiser_id, pdf_filename, created_by, created_at, status FROM proposals_v1 ORDER BY created_at DESC LIMIT 200")
+    hist = qdf("SELECT section, proposal_no, property_id, pdf_filename, created_by, created_at, status FROM proposals ORDER BY created_at DESC LIMIT 200")
     st.dataframe(hist, use_container_width=True, height=420)
 
 elif PAGE == "WhatsApp":
-    page_title("💬 WhatsApp", "Click-to-chat + logs + hourly limit.")
-    settings = get_company_settings()
-    limit_per_hour = int(settings.get("whatsapp_limit_per_hour") or 50)
-
-    ok_rate = whatsapp_rate_ok(USER, limit_per_hour)
-    if not ok_rate:
-        st.warning("You reached the WhatsApp limit in the last hour.")
-
+    page_title("💬 WhatsApp (Click-to-chat)", "Open WhatsApp message and log sent.")
     msg_tpl = st.text_area(
         "Message template",
-        value="Hello {contact_person}, this is The Adbook Outdoor. We’d like to discuss {section} opportunity for {property_name} in {city}, {district}.",
+        value="Hello {contact_person}, this is The Adbook Outdoor. We’d like to discuss an opportunity for {property_name} in {city}, {district}.",
         height=90,
     )
 
-    df = leads_df.drop_duplicates("__hash").copy().head(200)
+    df = leads_df.drop_duplicates("__hash").copy().head(300)
     df["display"] = df["__hash"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
-
     sel = st.selectbox("Select lead", df["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
     pid = str(rev.get(sel))
@@ -1361,128 +1189,42 @@ elif PAGE == "WhatsApp":
 
     phone = r.get("Promoter Mobile Number", "")
     contact = r.get("Promoter / Developer Name", "") or "Sir/Madam"
+
     msg = msg_tpl.format(
-        section=SECTION,
         property_name=r.get("Property Name", ""),
         city=r.get("City", ""),
         district=r.get("District", ""),
         contact_person=contact,
     )
 
-    st.link_button("Open WhatsApp", whatsapp_url(phone, msg), use_container_width=True,
-                   disabled=(not ok_rate) or (not bool(normalize_mobile(phone))))
+    st.link_button("Open WhatsApp", whatsapp_url(phone, msg), use_container_width=True, disabled=(whatsapp_url(phone, msg) == "#"))
 
     if st.button("Mark Sent ✅", type="primary"):
-        exec_sql("INSERT INTO whatsapp_logs_v1(log_id,campaign_id,lead_hash,username,action_status) VALUES(:id,'manual',:h,:u,'Sent')",
-                 {"id": str(uuid.uuid4()), "h": pid, "u": USER})
+        exec_sql(
+            "INSERT INTO whatsapp_logs(log_id,lead_hash,username,action_status) VALUES(:id,:h,:u,'Sent')",
+            {"id": str(uuid.uuid4()), "h": pid, "u": USER},
+        )
         audit(USER, "WA_SENT", pid_to_code.get(pid, pid[:6]))
         st.success("Logged.")
         st.rerun()
 
+    st.markdown("---")
+    logs = qdf("SELECT * FROM whatsapp_logs ORDER BY created_at DESC LIMIT 200")
+    st.dataframe(logs, use_container_width=True, height=380)
+
 elif PAGE == "Reports":
-    page_title("📊 Reports", "Updates + Payments.")
-    upd = qdf("SELECT * FROM lead_updates_v1 WHERE section=:s ORDER BY last_updated DESC LIMIT 2000", {"s": SECTION})
-    st.markdown("### Lead Updates")
-    st.dataframe(upd, use_container_width=True, height=320)
-
-    st.markdown("### Agreements")
-    ag = qdf("SELECT * FROM agreements_v1 WHERE section=:s ORDER BY created_at DESC LIMIT 500", {"s": SECTION})
-    st.dataframe(ag, use_container_width=True, height=240)
-
-    st.markdown("### Payments")
-    pay = qdf("""
-        SELECT p.*, a.title
-        FROM payments_v1 p
-        LEFT JOIN agreements_v1 a ON a.agr_id = p.agr_id
-        ORDER BY p.created_at DESC
-        LIMIT 500
-    """)
-    st.dataframe(pay, use_container_width=True, height=260)
-
-elif PAGE == "Advertisers":
-    if SECTION != SECTION_ADS:
-        st.error("Advertisers is only for Advertisement module.")
-        st.stop()
-
-    page_title("🏢 Advertisers", "Create and manage advertisers.")
-
-    with st.form("adv_form"):
-        company_name = st.text_input("Company name *")
-        contact_person = st.text_input("Contact person")
-        mobile = st.text_input("Mobile")
-        email = st.text_input("Email")
-        gst = st.text_input("GST")
-        notes = st.text_area("Notes", height=60)
-        ok = st.form_submit_button("Save advertiser", type="primary", disabled=not can(SECTION_ADS, "add", ROLE))
-
-    if ok:
-        if not company_name.strip():
-            st.error("Company name required.")
-        else:
-            exec_sql("""
-                INSERT INTO advertisers_v1(advertiser_id,company_name,contact_person,mobile,email,gst,notes)
-                VALUES(:id,:c,:p,:m,:e,:g,:n)
-            """, {"id": str(uuid.uuid4()), "c": company_name.strip(), "p": contact_person, "m": mobile, "e": email, "g": gst, "n": notes})
-            audit(USER, "ADVERTISER_SAVE", company_name.strip())
-            st.success("Saved.")
-            st.rerun()
-
-    ads = qdf("SELECT * FROM advertisers_v1 ORDER BY created_at DESC LIMIT 500")
-    st.dataframe(ads, use_container_width=True, height=520)
-
-elif PAGE == "Allotments":
-    if SECTION != SECTION_ADS:
-        st.error("Allotments is only for Advertisement module.")
-        st.stop()
-
-    page_title("📌 Allotments", "Allot advertisers to screens (basic).")
-    ads = qdf("SELECT advertiser_id, company_name FROM advertisers_v1 ORDER BY created_at DESC")
-    screens = qdf("SELECT screen_id, property_id FROM screens_v1 WHERE is_active=1 ORDER BY last_updated DESC")
-
-    if len(ads) == 0 or len(screens) == 0:
-        st.info("Add Advertisers and Screens first.")
-        st.stop()
-
-    ads["display"] = ads["company_name"].astype("string") + " — " + ads["advertiser_id"].astype("string").str[:6]
-    screens["display"] = screens["screen_id"].astype("string") + " — " + screens["property_id"].astype("string").map(lambda x: pid_to_code.get(x, x[:6]))
-
-    with st.form("allo_form"):
-        a = st.selectbox("Advertiser", ads["display"].tolist())
-        s = st.selectbox("Screen", screens["display"].tolist())
-        start_date = st.text_input("Start date", value=str(date.today()))
-        end_date = st.text_input("End date", value=str(date.today() + timedelta(days=30)))
-        monthly_amount = st.number_input("Monthly amount (₹)", min_value=0.0, value=0.0)
-        status = st.selectbox("Status", ["Active", "Paused", "Closed"], index=0)
-        notes = st.text_area("Notes", height=60)
-        ok = st.form_submit_button("Save allotment", type="primary", disabled=not can(SECTION_ADS, "add", ROLE))
-
-    if ok:
-        advertiser_id = str(ads[ads["display"] == a].iloc[0]["advertiser_id"])
-        screen_id = str(screens[screens["display"] == s].iloc[0]["screen_id"])
-        exec_sql("""
-            INSERT INTO ad_allotments_v1(allotment_id,screen_id,advertiser_id,start_date,end_date,monthly_amount,status,notes)
-            VALUES(:id,:sid,:aid,:sd,:ed,:amt,:st,:n)
-        """, {"id": str(uuid.uuid4()), "sid": screen_id, "aid": advertiser_id, "sd": start_date, "ed": end_date, "amt": float(monthly_amount), "st": status, "n": notes})
-        audit(USER, "ALLOTMENT_SAVE", f"{screen_id} -> {advertiser_id[:6]}")
-        st.success("Saved.")
-        st.rerun()
-
-    allo = qdf("""
-        SELECT a.*, adv.company_name
-        FROM ad_allotments_v1 a
-        LEFT JOIN advertisers_v1 adv ON adv.advertiser_id = a.advertiser_id
-        ORDER BY a.created_at DESC
-        LIMIT 500
-    """)
-    st.dataframe(allo, use_container_width=True, height=520)
+    page_title("📊 Reports", "Latest lead updates.")
+    upd = qdf("SELECT * FROM lead_updates WHERE section=:s ORDER BY last_updated DESC LIMIT 3000", {"s": SECTION})
+    st.dataframe(upd, use_container_width=True, height=560)
 
 elif PAGE == "Admin Panel":
     if ROLE != ROLE_SUPERADMIN:
         st.error("Not allowed.")
         st.stop()
 
-    page_title("⚙ Admin Panel", "Create users, reset passwords, company settings.")
-    tabs = st.tabs(["Users", "Company Settings", "Audit Logs", "Signature Upload"])
+    page_title("⚙ Admin Panel", "Create users, reset passwords, company settings, audit logs.")
+
+    tabs = st.tabs(["Users", "Company Settings", "Audit Logs"])
 
     with tabs[0]:
         users = qdf("SELECT username, role, section_scope, is_active, last_login_at, created_at FROM users ORDER BY created_at DESC")
@@ -1494,12 +1236,15 @@ elif PAGE == "Admin Panel":
             role = st.selectbox("Role", list(ROLE_LABEL.keys()))
             scope = st.selectbox("Scope", [SCOPE_BOTH, SECTION_INSTALL, SECTION_ADS])
             pwd = st.text_input("Temporary password *", type="password")
+            mode = st.selectbox("Password mode", ["Secure (recommended)", "Simple (plain$)"], index=0)
             ok = st.form_submit_button("Save user", type="primary")
         if ok:
             if not u.strip() or not pwd:
                 st.error("Username and password required.")
             else:
-                exec_sql("""
+                ph = pbkdf2_hash(pwd) if mode.startswith("Secure") else "plain$" + pwd
+                exec_sql(
+                    """
                     INSERT INTO users(username,password_hash,role,section_scope,is_active)
                     VALUES(:u,:p,:r,:s,1)
                     ON CONFLICT(username) DO UPDATE SET
@@ -1508,14 +1253,16 @@ elif PAGE == "Admin Panel":
                       section_scope=EXCLUDED.section_scope,
                       is_active=1,
                       updated_at=NOW()
-                """, {"u": u.strip(), "p": pbkdf2_hash(pwd), "r": role, "s": scope})
+                    """,
+                    {"u": u.strip(), "p": ph, "r": role, "s": scope},
+                )
                 audit(USER, "CREATE_USER", f"{u.strip()} role={role} scope={scope}")
                 st.success("Saved.")
                 st.rerun()
 
         st.markdown("### Disable user")
         if len(users):
-            sel = st.selectbox("Select user to disable", users["username"].astype("string").tolist())
+            sel = st.selectbox("Select user", users["username"].astype("string").tolist())
             if st.button("Disable", type="primary"):
                 exec_sql("UPDATE users SET is_active=0, updated_at=NOW() WHERE username=:u", {"u": sel})
                 audit(USER, "DISABLE_USER", sel)
@@ -1534,11 +1281,7 @@ elif PAGE == "Admin Panel":
             st.success("Saved.")
             st.rerun()
 
-    with tabs[2]:
-        logs = qdf("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 500")
-        st.dataframe(logs, use_container_width=True, height=520)
-
-    with tabs[3]:
+        st.markdown("---")
         st.markdown("### Signature upload (per user)")
         users_df = qdf("SELECT username FROM users ORDER BY username")
         sel = st.selectbox("User", users_df["username"].astype("string").tolist(), key="sig_user")
@@ -1555,3 +1298,7 @@ elif PAGE == "Admin Panel":
             st.success("Uploaded.")
             st.rerun()
         st.write("Current:", prof.get("signature_filename", "(none)"))
+
+    with tabs[2]:
+        logs = qdf("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 500")
+        st.dataframe(logs, use_container_width=True, height=560)
