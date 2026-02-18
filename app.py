@@ -56,6 +56,112 @@ hr{border:0;border-top:1px solid var(--border);margin:1rem 0;}
 """,
     unsafe_allow_html=True,
 )
+# =========================================================
+# ---------------- Branding / UI ----------------
+# =========================================================
+
+import base64
+from pathlib import Path
+
+APP_TITLE = APP_TITLE if "APP_TITLE" in globals() else "The Adbook — AIAMS"
+LOGO_PATH = "assets/logo.png"
+
+def _img_to_base64(path: str) -> str:
+    """Convert local image to base64 so it can be shown inside HTML safely on Streamlit Cloud."""
+    p = Path(path)
+    if not p.exists():
+        return ""
+    data = p.read_bytes()
+    return base64.b64encode(data).decode("utf-8")
+
+# Must be FIRST Streamlit call
+st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="🟧")
+
+# CSS theme
+st.markdown("""
+<style>
+:root{
+  --bg:#ffffff; --surface:#ffffff; --surface2:#f6f8fb; --border:#e6e8ef;
+  --text:#0f172a; --muted:#475569; --accent:#0f5b66; --accent2:#0b3d45;
+  --warn:#b45309; --danger:#b91c1c; --ok:#15803d;
+}
+.block-container{max-width:1560px;padding-top:.65rem;padding-bottom:2rem;}
+[data-testid="stAppViewContainer"]{background:var(--bg);}
+[data-testid="stHeader"]{background:rgba(255,255,255,.92);border-bottom:1px solid var(--border);}
+[data-testid="stSidebar"]{background:var(--surface2);border-right:1px solid var(--border);}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:14px;box-shadow:0 8px 24px rgba(15,23,42,.06);}
+.card-tight{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px;}
+.small{color:var(--muted);font-size:.92rem;}
+.section{font-weight:850;font-size:1.05rem;margin:0 0 .25rem 0;}
+
+.kpi{background:#fff;border:1px solid var(--border);border-radius:16px;padding:10px 12px;}
+.kpi .label{color:var(--muted);font-size:.85rem;margin-bottom:2px;}
+.kpi .val{font-weight:850;font-size:1.25rem;color:var(--text);}
+
+.badge{display:inline-block;padding:5px 10px;border-radius:999px;border:1px solid var(--border);background:#fff;color:var(--muted);font-size:.82rem;margin-right:6px;margin-bottom:6px;}
+.badge-strong{border-color:rgba(15,91,102,.25);background:rgba(15,91,102,.06);color:var(--accent);}
+.badge-warn{border-color:rgba(180,83,9,.25);background:rgba(180,83,9,.08);color:var(--warn);}
+.badge-danger{border-color:rgba(185,28,28,.25);background:rgba(185,28,28,.08);color:var(--danger);}
+
+.sticky-wrap{
+  position:sticky;top:0;z-index:999;background:rgba(255,255,255,.96);
+  backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--border);
+  padding:8px 0 10px 0;margin-bottom:10px;
+}
+
+div.stButton>button{
+  width:100%;border-radius:12px;padding:.65rem .9rem;
+  font-weight:650;border:1px solid var(--border);
+}
+div.stButton>button[kind="primary"]{
+  background:var(--accent);color:#fff;border:1px solid rgba(15,91,102,.35);
+}
+hr{border:0;border-top:1px solid var(--border);margin:1rem 0;}
+
+.brandbar{
+  display:flex;align-items:center;gap:12px;
+  padding:10px 14px;border:1px solid var(--border);
+  border-radius:18px;background:#fff;
+  box-shadow:0 8px 24px rgba(15,23,42,.06);
+  margin-bottom:10px;
+}
+.brandbar .title{font-weight:900;font-size:1.2rem;color:var(--text);line-height:1;}
+.brandbar .sub{color:var(--muted);font-size:.92rem;margin-top:2px;}
+.brandbar img{height:44px; width:auto;}
+
+@media (max-width: 900px){
+  .block-container{padding-left:0.85rem;padding-right:0.85rem;}
+  .brandbar img{height:38px;}
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Top brand header (with logo)
+logo_b64 = _img_to_base64(LOGO_PATH)
+if logo_b64:
+    logo_html = f"<img src='data:image/png;base64,{logo_b64}'/>"
+else:
+    logo_html = "<div style='width:44px;height:44px;border-radius:10px;background:rgba(15,91,102,.08);border:1px solid #e6e8ef;'></div>"
+
+st.markdown(f"""
+<div class="brandbar">
+  {logo_html}
+  <div>
+    <div class="title">The Adbook AIAMS</div>
+    <div class="sub">Inventory • Agreements • WhatsApp • Proposals • Reports</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# Sidebar logo + title
+with st.sidebar:
+    if Path(LOGO_PATH).exists():
+        st.image(LOGO_PATH, use_container_width=True)
+    st.markdown("### The Adbook AIAMS")
+    st.caption("Outdoor Media Operations System")
+    st.markdown("---")
 
 
 # =========================================================
