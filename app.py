@@ -499,16 +499,6 @@ USER = AUTH["user"]
 ROLE = AUTH["role"]
 SCOPE = AUTH.get("scope", SCOPE_BOTH)
 
-
-# =========================================================
-# DATA HELPERS
-# =========================================================
-@st.cache_data(show_spinner=False)
-import io
-import pandas as pd
-import streamlit as st
-import os
-
 # =========================================================
 # DATA HELPERS
 # =========================================================
