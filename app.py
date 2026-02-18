@@ -504,59 +504,91 @@ SCOPE = AUTH.get("scope", SCOPE_BOTH)
 # DATA HELPERS
 # =========================================================
 @st.cache_data(show_spinner=False)
+import io
+import pandas as pd
+import streamlit as st
+import os
+
+# =========================================================
+# DATA HELPERS
+# =========================================================
+
+@st.cache_data(show_spinner=False)
+def _read_csv_bytes(file_bytes: bytes) -> pd.DataFrame:
+    """
+    Robust CSV loader:
+    - tries common encodings
+    - falls back to a safe mode that never crashes
+    """
+    encodings_to_try = ["utf-8-sig", "utf-8", "cp1252", "latin1"]
+
+    last_err = None
+    for enc in encodings_to_try:
+        try:
+            bio = io.BytesIO(file_bytes)
+            return pd.read_csv(
+                bio,
+                encoding=enc,
+                dtype=str,
+                low_memory=False,
+            )
+        except UnicodeDecodeError as e:
+            last_err = e
+
+    # Last fallback: never fail (but may replace some bad characters)
+    bio = io.BytesIO(file_bytes)
+    return pd.read_csv(
+        bio,
+        encoding="latin1",
+        dtype=str,
+        low_memory=False,
+        engine="python",
+        on_bad_lines="skip",   # if some rows are broken
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _read_xlsx_bytes(file_bytes: bytes, sheet_name: str) -> pd.DataFrame:
+    bio = io.BytesIO(file_bytes)
+    return pd.read_excel(
+        bio,
+        sheet_name=sheet_name,
+        dtype=str,
+        engine="openpyxl",
+    )
+
+
 def read_leads_file(upload=None) -> pd.DataFrame:
-
-    def _read_csv_with_fallbacks(file_obj):
-        # Try common encodings (Excel/Windows/UTF-8)
-        encodings = ["utf-8-sig", "utf-8", "cp1252", "iso-8859-1"]
-
-        for enc in encodings:
-            try:
-                file_obj.seek(0)
-                return pd.read_csv(file_obj, encoding=enc, low_memory=False)
-            except Exception:
-                continue
-
-        # Last fallback: decode with replacement
-        file_obj.seek(0)
-        raw = file_obj.read()
-        text = raw.decode("utf-8", errors="replace")
-        return pd.read_csv(io.StringIO(text), low_memory=False)
-
-    # ---------- When using bundled CSV ----------
+    # 1) Load bytes (either from uploaded file or local DATA_FILE)
     if upload is None:
-
         if not os.path.exists(DATA_FILE):
             st.error(f"Missing {DATA_FILE}. Put it in the same folder as app.py")
             st.stop()
-
         with open(DATA_FILE, "rb") as f:
-            raw = f.read()
+            file_bytes = f.read()
+        filename = DATA_FILE.lower()
+    else:
+        file_bytes = upload.getvalue()
+        filename = upload.name.lower()
 
-        try:
-            return pd.read_csv(io.BytesIO(raw), encoding="utf-8-sig", low_memory=False)
-        except Exception:
-            try:
-                return pd.read_csv(io.BytesIO(raw), encoding="cp1252", low_memory=False)
-            except Exception:
-                text = raw.decode("utf-8", errors="replace")
-                return pd.read_csv(io.StringIO(text), low_memory=False)
+    # 2) Read CSV / Excel
+    if filename.endswith(".csv"):
+        df = _read_csv_bytes(file_bytes)
 
-    # ---------- When user uploads file ----------
-    name = upload.name.lower()
-
-    if name.endswith(".csv"):
-        df = _read_csv_with_fallbacks(upload)
+    elif filename.endswith(".xlsx") or filename.endswith(".xls"):
+        # IMPORTANT: sheet selector must be OUTSIDE cached functions
+        xl = pd.ExcelFile(io.BytesIO(file_bytes))
+        sheet = st.selectbox("Select sheet", xl.sheet_names, key="sheet_picker")
+        df = _read_xlsx_bytes(file_bytes, sheet)
 
     else:
-        # Excel file
-        xl = pd.ExcelFile(upload)
-        sheet = st.selectbox("Sheet", xl.sheet_names)
-        df = pd.read_excel(upload, sheet_name=sheet)
+        st.error("Unsupported file. Please upload CSV or Excel (.xlsx).")
+        st.stop()
 
-    # ---------- Cleanup ----------
+    # 3) Clean columns
     df.columns = [str(c).strip() for c in df.columns]
 
+    # 4) Your rename rule
     if "District Type" in df.columns and "City" not in df.columns:
         df = df.rename(columns={"District Type": "City"})
 
