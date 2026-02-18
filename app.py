@@ -643,11 +643,76 @@ def _letters2(x) -> str:
 
 def ensure_property_codes(leads_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Assigns a unique property_code (e.g., AHAH001) to each property_id (__hash).
-    Fixes duplicate property_code errors by retrying with next number.
+    Creates unique property_code per property_id.
+    Uses ON CONFLICT(property_code) DO NOTHING and retries, so duplicate codes never crash.
     """
     needed = leads_df[["__hash", "District", "City", "Property Name"]].drop_duplicates().copy()
     needed.columns = ["property_id", "district", "city", "property_name"]
+
+    # Fetch existing mappings
+    existing = qdf("SELECT property_id, property_code FROM property_codes")
+    existing_map = (
+        dict(zip(existing["property_id"].astype("string"), existing["property_code"].astype("string")))
+        if len(existing)
+        else {}
+    )
+
+    for r in needed.to_dict("records"):
+        pid = str(r["property_id"])
+
+        # If already has code, skip
+        if pid in existing_map and existing_map[pid] and existing_map[pid] != "nan":
+            continue
+
+        district = r.get("district", "") or ""
+        city = r.get("city", "") or ""
+        pname = r.get("property_name", "") or ""
+
+        prefix = _letters2(district) + _letters2(city)
+
+        # We retry until insert succeeds
+        n = 1
+        while True:
+            code = f"{prefix}{n:03d}"
+
+            # Try insert. If property_code already exists, DO NOTHING (no crash).
+            # If property_id already exists, DO NOTHING (shouldn't happen due to skip, but safe).
+            with engine().begin() as conn:
+                res = conn.execute(
+                    text("""
+                        INSERT INTO property_codes(property_id, property_code, district, city, property_name)
+                        VALUES(:pid, :code, :district, :city, :pname)
+                        ON CONFLICT (property_code) DO NOTHING
+                    """),
+                    {"pid": pid, "code": code, "district": district, "city": city, "pname": pname},
+                )
+
+            # If inserted, rowcount will be 1
+            if getattr(res, "rowcount", 0) == 1:
+                break
+
+            # Not inserted because code was already taken -> try next number
+            n += 1
+
+            # Safety fallback if it becomes too large
+            if n > 999:
+                code = f"{prefix}{uuid.uuid4().hex[:3].upper()}"
+                with engine().begin() as conn:
+                    res2 = conn.execute(
+                        text("""
+                            INSERT INTO property_codes(property_id, property_code, district, city, property_name)
+                            VALUES(:pid, :code, :district, :city, :pname)
+                            ON CONFLICT (property_code) DO NOTHING
+                        """),
+                        {"pid": pid, "code": code, "district": district, "city": city, "pname": pname},
+                    )
+                if getattr(res2, "rowcount", 0) == 1:
+                    break
+                # if still conflicts (very rare) just restart number loop
+                n = 1
+
+    return qdf("SELECT property_id, property_code FROM property_codes")
+
 
     # Existing mappings
     existing = qdf("SELECT property_id, property_code FROM property_codes")
