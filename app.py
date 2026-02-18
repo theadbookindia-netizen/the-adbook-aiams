@@ -132,13 +132,6 @@ def get_database_url() -> str:
 
     return db_url
 
-
-@st.cache_resource(show_spinner=False)
-import os
-import socket
-import streamlit as st
-from sqlalchemy import create_engine
-
 @st.cache_resource(show_spinner=False)
 def db_engine():
     """
