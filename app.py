@@ -1473,7 +1473,7 @@ if q.strip():
     t1,t2 = st.tabs(["📋 View", "➕ Add / Edit"])
     with t1:
         st.dataframe(scr, use_container_width=True, height=520)
-if len(scr) and can(SECTION, "export", ROLE):
+if (scr is not None) and (hasattr(scr, "empty") and not scr.empty) and can(SECTION, "export", ROLE):
     st.download_button("⬇ Export screens (CSV)", data=df_to_csv_bytes(scr), file_name="screens.csv", mime="text/csv")
 
     with t2:
