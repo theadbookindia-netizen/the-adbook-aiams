@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import NullPool
 
 # ---- PDF (Cloud-safe) ----
 from reportlab.lib.pagesizes import A4
@@ -183,12 +184,10 @@ def db_engine():
     return create_engine(
         db_url,
         pool_pre_ping=True,
-        pool_size=3,
-        max_overflow=2,
-        pool_timeout=30,
+        poolclass=NullPool,  # safest with Supabase Pooler/PgBouncer
         # Supabase Pooler / PgBouncer (transaction pooling) + psycopg3:
-        # Disable prepared statements to avoid DuplicatePreparedStatement / InvalidSqlStatementName
-        connect_args={"prepare_threshold": 0},
+        # Disable prepared statements & statement cache to avoid _pg3_* errors
+        connect_args={"prepare_threshold": 0, "statement_cache_size": 0},
     )
 
 
@@ -1206,7 +1205,7 @@ def save_proposal_pdf(section: str, property_id: str, pdf_bytes: bytes, created_
 # =========================================================
 with st.sidebar:
     if Path(LOGO_PATH).exists():
-        st.image(LOGO_PATH, use_container_width=True)
+        st.image(LOGO_PATH, width='stretch')
     st.markdown("### The Adbook AIAMS")
     st.caption("Outdoor Media Operations System")
     st.markdown("---")
@@ -1357,7 +1356,7 @@ if gq:
             continue
         any_hit = True
         with st.expander(f"{mod} — {len(df)} results", expanded=False):
-            st.dataframe(df, use_container_width=True, height=280)
+            st.dataframe(df, width='stretch', height=280)
             if can(SECTION, "export", ROLE):
                 st.download_button(f"⬇ Export {mod} (CSV)", data=df_to_csv_bytes(df), file_name=f"{mod.replace(' ','_').lower()}_search.csv", mime="text/csv")
     if not any_hit:
@@ -1383,7 +1382,7 @@ if gq:
     view_cols = ["District", "City", "Property Name", "Promoter / Developer Name",
                  "Promoter Mobile Number", "Promoter Email", "status", "assigned_to", "follow_up"]
     dfv = safe_df_cols(df, view_cols).iloc[start:end]
-    st.dataframe(dfv, use_container_width=True, height=560)
+    st.dataframe(dfv, width='stretch', height=560)
 
 elif PAGE_KEY == "Leads Pipeline":
     page_title("🧩 Leads (Update Status)", "Open one lead and update status, notes, follow-up.")
@@ -1450,7 +1449,7 @@ elif PAGE_KEY == "Inventory (Sites)":
 
     tabs = st.tabs(["📋 View", "➕ Add / Edit", "🔁 Recount Screens"])
     with tabs[0]:
-        st.dataframe(inv, use_container_width=True, height=520)
+        st.dataframe(inv, width='stretch', height=520)
         if len(inv) and can(SECTION, "export", ROLE):
             st.download_button("⬇ Export sites (CSV)", data=df_to_csv_bytes(inv), file_name="inventory_sites.csv", mime="text/csv")
 
@@ -1547,6 +1546,8 @@ elif PAGE_KEY == "Inventory (Sites)":
 elif PAGE_KEY == "Screens":
     page_title("🖥 Screens", "Register screens for a site and manage service due dates.")
 
+    scr = pd.DataFrame()  # default to avoid NameError if query fails early
+
     if not can(SECTION, "view", ROLE):
         st.error("You don't have permission to view this section.")
         st.stop()
@@ -1593,7 +1594,7 @@ elif PAGE_KEY == "Screens":
     t1, t2 = st.tabs(["📋 View", "➕ Add / Edit"])
 
     with t1:
-        st.dataframe(scr, use_container_width=True, height=520)
+        st.dataframe(scr, width='stretch', height=520)
         if (len(scr) > 0) and can(SECTION, "export", ROLE):
             st.download_button(
                 "⬇ Export screens (CSV)",
@@ -1680,7 +1681,7 @@ elif PAGE_KEY == "Service Center":
     )
 
     st.markdown(f"<span class='badge badge-strong'>Due: {len(due):,}</span>", unsafe_allow_html=True)
-    st.dataframe(due, use_container_width=True, height=420)
+    st.dataframe(due, width='stretch', height=420)
 
     st.markdown("### ✅ Mark serviced")
     if len(due):
@@ -1726,7 +1727,7 @@ elif PAGE_KEY == "Ad Sales Inventory":
     st.markdown(f"<span class='badge badge-strong'>Records: {len(ad):,}</span>", unsafe_allow_html=True)
     t1,t2 = st.tabs(["📋 View", "➕ Add / Edit"])
     with t1:
-        st.dataframe(ad, use_container_width=True, height=520)
+        st.dataframe(ad, width='stretch', height=520)
 if len(ad) and can(SECTION, "export", ROLE):
     st.download_button("⬇ Export bookings (CSV)", data=df_to_csv_bytes(ad), file_name="ad_inventory.csv", mime="text/csv")
 
@@ -1812,7 +1813,7 @@ elif PAGE_KEY == "Agreements":
     st.markdown(f"<span class='badge badge-strong'>Agreements: {len(ag):,}</span>", unsafe_allow_html=True)
     t1,t2 = st.tabs(["📋 View", "➕ Add / Edit"])
     with t1:
-        st.dataframe(ag, use_container_width=True, height=520)
+        st.dataframe(ag, width='stretch', height=520)
 if len(ag) and can(SECTION, "export", ROLE):
     st.download_button("⬇ Export agreements (CSV)", data=df_to_csv_bytes(ag), file_name="agreements.csv", mime="text/csv")
 
@@ -1914,7 +1915,7 @@ elif PAGE_KEY == "Billing & Reminders":
 
     t1, t2 = st.tabs(["📋 Due / Payments", "➕ Add / Update Payment"])
     with t1:
-        st.dataframe(pay, use_container_width=True, height=520)
+        st.dataframe(pay, width='stretch', height=520)
         if len(pay) and can(SECTION, "export", ROLE):
             st.download_button("⬇ Export payments (CSV)", data=df_to_csv_bytes(pay), file_name="payments.csv", mime="text/csv")
 
@@ -1979,7 +1980,7 @@ elif PAGE_KEY == "Documents Vault":
 
     t1,t2 = st.tabs(["📋 View", "⬆ Upload"])
     with t1:
-        st.dataframe(docs, use_container_width=True, height=420)
+        st.dataframe(docs, width='stretch', height=420)
         if len(docs) and can(SECTION, "export", ROLE):
             st.download_button("⬇ Export documents (CSV)", data=df_to_csv_bytes(docs), file_name="documents_vault.csv", mime="text/csv")
         if len(docs):
