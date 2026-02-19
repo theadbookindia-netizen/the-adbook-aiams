@@ -840,19 +840,76 @@ def get_property_codes_df() -> pd.DataFrame:
 
 
 def ensure_property_codes(leads_df: pd.DataFrame, batch_size: int = 700) -> pd.DataFrame:
+    """
+    Ensure every lead/property has a unique property_code in public.property_codes.
+
+    - Base code: <4 letters><3 digits> (e.g., DICI001)
+    - If the base code is already taken, suffix letters are appended:
+        DICI001A, DICI001B, ... DICI001AA, etc.
+
+    This function is written to be **crash-proof** on Streamlit Cloud:
+    - cleans bad/blank property_id
+    - avoids duplicate property_code generation
+    - inserts row-by-row (so one bad row cannot crash the whole app)
+    """
+
+    # ---- Helpers ----
+    def _letters_n(x: str, n: int) -> str:
+        s = re.sub(r"[^A-Za-z]+", "", str(x or "")).upper()
+        return (s + ("X" * n))[:n]
+
+    def _make_prefix4(district: str, city: str, pname: str) -> str:
+        pref = (_letters_n(district, 2) + _letters_n(city, 2)).upper()
+        if pref == "XXXX":
+            pref = _letters_n(pname, 4)
+        if not pref or pref == "XXXX":
+            pref = "PROP"
+        return pref[:4]
+
+    def _suffixes():
+        A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        for a in A:
+            yield a
+        for a in A:
+            for b in A:
+                yield a + b
+        for a in A:
+            for b in A:
+                for c in A:
+                    yield a + b + c
+
+    def _as_text(x):
+        if x is None:
+            return ""
+        if isinstance(x, (dict, list, tuple, set)):
+            return str(x)
+        return str(x)
+
+    if leads_df is None or len(leads_df) == 0:
+        return get_property_codes_df()
+
+    # Pull the required columns and sanitize
     needed = leads_df[["__hash", "District", "City", "Property Name"]].drop_duplicates().copy()
+    needed = needed[needed["__hash"].notna()]
+    needed = needed[needed["__hash"].astype("string").str.strip() != ""]
     needed.columns = ["property_id", "district", "city", "property_name"]
 
     existing = get_property_codes_df()
     existing_ids = set(existing["property_id"].astype("string").tolist()) if len(existing) else set()
 
+    # If already complete, return quickly
     missing = needed[~needed["property_id"].astype("string").isin(existing_ids)]
     if len(missing) == 0:
         return existing
 
+    # Track existing codes (any format) as "taken"
+    existing_codes = set(existing["property_code"].astype("string").fillna("").str.strip().tolist()) if len(existing) else set()
+    taken_codes = {c for c in existing_codes if c}
+
+    # Track used numeric blocks by prefix (only for standard codes like ABCD001...)
     used_by_prefix = {}
     if len(existing):
-        pc = existing["property_code"].astype("string").fillna("")
+        pc = existing["property_code"].astype("string").fillna("").str.strip()
         pref = pc.str.slice(0, 4)
         num = pd.to_numeric(pc.str.slice(4, 7), errors="coerce")
         ok = pref.str.match(r"^[A-Z]{4}$", na=False) & num.notna()
@@ -860,40 +917,85 @@ def ensure_property_codes(leads_df: pd.DataFrame, batch_size: int = 700) -> pd.D
             used_by_prefix.setdefault(p, set()).add(int(n))
 
     next_num = {}
-    def next_for(pref: str) -> int:
+    def _next_for(pref: str) -> int:
         if pref not in next_num:
             next_num[pref] = (max(used_by_prefix.get(pref, {0})) + 1) if used_by_prefix.get(pref) else 1
         return next_num[pref]
 
+    # Build insert rows with collision-free codes
     inserts = []
     for r in missing.to_dict("records"):
-        district = r.get("district", "") or ""
-        city = r.get("city", "") or ""
-        pname = r.get("property_name", "") or ""
-        pid = str(r["property_id"])
-        pref = _letters2(district) + _letters2(city)
+        pid = _as_text(r.get("property_id", "")).strip()
+        if not pid:
+            continue
 
-        n = next_for(pref)
-        while n in used_by_prefix.get(pref, set()):
+        district = _as_text(r.get("district", "")).strip()
+        city = _as_text(r.get("city", "")).strip()
+        pname = _as_text(r.get("property_name", "")).strip()
+
+        pref4 = _make_prefix4(district, city, pname)
+
+        n = _next_for(pref4)
+        while n in used_by_prefix.get(pref4, set()):
             n += 1
-        code = f"{pref}{n:03d}"
-        used_by_prefix.setdefault(pref, set()).add(n)
-        next_num[pref] = n + 1
+        base = f"{pref4}{n:03d}"
 
-        inserts.append({"pid": pid, "code": code, "district": district, "city": city, "pname": pname})
+        code = base
+        if code in taken_codes:
+            # add suffix on same base
+            for suf in _suffixes():
+                cand = base + suf
+                if cand not in taken_codes:
+                    code = cand
+                    break
 
-    if inserts:
-        sql = text("""
-            INSERT INTO property_codes(property_id, property_code, district, city, property_name)
-            VALUES(:pid, :code, :district, :city, :pname)
-            ON CONFLICT (property_id) DO NOTHING
-        """)
-        for i in range(0, len(inserts), batch_size):
-            batch = inserts[i:i+batch_size]
-            with db_engine().begin() as conn:
-                conn.execute(sql, batch)
+        # last-resort: bump number until we find a free slot
+        while code in taken_codes:
+            n += 1
+            base = f"{pref4}{n:03d}"
+            code = base
+            if code in taken_codes:
+                for suf in _suffixes():
+                    cand = base + suf
+                    if cand not in taken_codes:
+                        code = cand
+                        break
 
-        # invalidate cache only when we inserted
+        taken_codes.add(code)
+        used_by_prefix.setdefault(pref4, set()).add(n)
+        next_num[pref4] = n + 1
+
+        inserts.append({
+            "pid": pid,
+            "code": code,
+            "district": district[:200],
+            "city": city[:200],
+            "pname": pname[:500],
+        })
+
+    if not inserts:
+        return get_property_codes_df()
+
+    # IMPORTANT: insert row-by-row (one bad row cannot crash the app)
+    sql = text("""
+        INSERT INTO public.property_codes(property_id, property_code, district, city, property_name)
+        VALUES(:pid, :code, :district, :city, :pname)
+        ON CONFLICT DO NOTHING
+    """)
+
+    inserted = 0
+    skipped = 0
+    with db_engine().begin() as conn:
+        for row in inserts:
+            try:
+                conn.execute(sql, row)
+                inserted += 1
+            except Exception:
+                skipped += 1
+                # Do not crash; continue
+                continue
+
+    if inserted > 0:
         get_property_codes_df.clear()
 
     return get_property_codes_df()
@@ -1447,87 +1549,112 @@ elif PAGE_KEY == "Screens":
         st.stop()
 
     inv = qdf("SELECT property_id, property_code, property_name, city, district FROM inventory_sites ORDER BY property_name")
-    prop = st.selectbox("Filter by property", ["(All)"] + inv["property_id"].fillna("").astype(str).tolist())
-    params = {}
-    sql = "SELECT * FROM screens "
-    if prop != "(All)":
-        sql += "WHERE property_id=:pid "
-        params["pid"] = prop
-    sql += "ORDER BY last_updated DESC LIMIT 3000"
-    scr = qdf(sql, params)
+    prop_ids = inv["property_id"].fillna("").astype(str).tolist()
+    prop_pick = st.selectbox("Filter by property", ["(All)"] + prop_ids)
 
-q = st.text_input("Search screens", placeholder="location / installer / id …")
-if q.strip():
-    params2 = dict(params)
+    # Search (server-side)
+    q = st.text_input("Search screens", placeholder="property / location / installer / id …").strip()
+
     base = """SELECT s.*, i.property_name, i.city, i.district
               FROM screens s
               LEFT JOIN inventory_sites i ON i.property_id = s.property_id"""
-    if prop != "(All)":
-        sql2 = base + " WHERE s.property_id=:pid AND " + ilike_clause(['s.screen_id','s.property_id','i.property_name','i.city','i.district','s.screen_location','s.installed_by'], 'q')
+    params = {}
+
+    if prop_pick != "(All)":
+        params["pid"] = prop_pick
+        where_prop = "s.property_id=:pid"
     else:
-        sql2 = base + " WHERE " + ilike_clause(['s.screen_id','s.property_id','i.property_name','i.city','i.district','s.screen_location','s.installed_by'], 'q')
-    params2["q"] = sql_q(q)
-    scr = qdf(sql2 + " ORDER BY s.last_updated DESC LIMIT 3000", params2)
+        where_prop = None
+
+    if q:
+        params["q"] = sql_q(q)
+        where_q = ilike_clause(
+            ['s.screen_id','s.property_id','i.property_name','i.city','i.district','s.screen_location','s.installed_by'],
+            'q'
+        )
+        if where_prop:
+            where = f"WHERE {where_prop} AND {where_q}"
+        else:
+            where = f"WHERE {where_q}"
+        sql = f"{base} {where} ORDER BY s.last_updated DESC LIMIT 3000"
+    else:
+        if where_prop:
+            sql = f"{base} WHERE {where_prop} ORDER BY s.last_updated DESC LIMIT 3000"
+        else:
+            sql = f"{base} ORDER BY s.last_updated DESC LIMIT 3000"
+
+    scr = qdf(sql, params)
 
     st.markdown(f"<span class='badge badge-strong'>Screens: {len(scr):,}</span>", unsafe_allow_html=True)
-    t1,t2 = st.tabs(["📋 View", "➕ Add / Edit"])
+
+    t1, t2 = st.tabs(["📋 View", "➕ Add / Edit"])
+
     with t1:
         st.dataframe(scr, use_container_width=True, height=520)
-if (scr is not None) and (hasattr(scr, "empty") and not scr.empty) and can(SECTION, "export", ROLE):
-    st.download_button("⬇ Export screens (CSV)", data=df_to_csv_bytes(scr), file_name="screens.csv", mime="text/csv")
+        if (len(scr) > 0) and can(SECTION, "export", ROLE):
+            st.download_button(
+                "⬇ Export screens (CSV)",
+                data=df_to_csv_bytes(scr),
+                file_name="screens.csv",
+                mime="text/csv",
+            )
 
     with t2:
-        if not can(SECTION, "edit", ROLE) and not can(SECTION, "add", ROLE):
+        if not (can(SECTION, "edit", ROLE) or can(SECTION, "add", ROLE)):
             st.info("No add/edit permission.")
         else:
-            options = ["(New)"] + scr["screen_id"].fillna("").astype(str).tolist()
+            options = ["(New)"] + scr["screen_id"].fillna("").astype(str).tolist() if len(scr) else ["(New)"]
             pick = st.selectbox("Select screen_id to edit", options)
+
             row = {}
             if pick != "(New)" and len(scr):
                 row = scr[scr["screen_id"].astype(str) == pick].iloc[0].to_dict()
 
             with st.form("screen_form"):
-                c1,c2 = st.columns(2)
+                c1, c2 = st.columns(2)
                 with c1:
-                    screen_id = st.text_input("screen_id", value=row.get("screen_id","") or str(uuid.uuid4()) if pick=="(New)" else str(row.get("screen_id","")))
-                    property_id = st.selectbox("property_id", inv["property_id"].fillna("").astype(str).tolist(), index=0 if not row.get("property_id") else max(0, inv.index[inv["property_id"].astype(str)==str(row.get("property_id"))][0]))
-                    screen_location = st.text_input("screen_location", value=row.get("screen_location","") or "")
-                    installed_by = st.text_input("installed_by", value=row.get("installed_by","") or USER)
+                    default_id = str(uuid.uuid4())
+                    screen_id = st.text_input("screen_id", value=(row.get("screen_id") or default_id) if pick == "(New)" else str(row.get("screen_id", "")))
+                    property_id = st.selectbox("property_id", prop_ids, index=0 if not row.get("property_id") else max(0, prop_ids.index(str(row.get("property_id")))) )
+                    screen_location = st.text_input("screen_location", value=row.get("screen_location", "") or "")
+                    installed_by = st.text_input("installed_by", value=row.get("installed_by", "") or USER)
                 with c2:
-                    installed_date = st.text_input("installed_date (YYYY-MM-DD)", value=row.get("installed_date","") or "")
-                    last_service_date = st.text_input("last_service_date (YYYY-MM-DD)", value=row.get("last_service_date","") or "")
-                    next_service_due = st.text_input("next_service_due (YYYY-MM-DD)", value=row.get("next_service_due","") or "")
-                    is_active = st.checkbox("Active", value=bool(int(row.get("is_active",1) or 1)))
+                    installed_date = st.text_input("installed_date (YYYY-MM-DD)", value=row.get("installed_date", "") or "")
+                    last_service_date = st.text_input("last_service_date (YYYY-MM-DD)", value=row.get("last_service_date", "") or "")
+                    next_service_due = st.text_input("next_service_due (YYYY-MM-DD)", value=row.get("next_service_due", "") or "")
+                    is_active = st.checkbox("Active", value=bool(int(row.get("is_active", 1) or 1)))
+
                 ok = st.form_submit_button("Save", type="primary")
+
             if ok:
                 exec_sql(
-                    """INSERT INTO screens(screen_id,property_id,screen_location,installed_date,installed_by,last_service_date,next_service_due,is_active,last_updated)
-                       VALUES(:screen_id,:property_id,:screen_location,:installed_date,:installed_by,:last_service_date,:next_service_due,:is_active,NOW())
-                       ON CONFLICT(screen_id) DO UPDATE SET
-                         property_id=EXCLUDED.property_id,
-                         screen_location=EXCLUDED.screen_location,
-                         installed_date=EXCLUDED.installed_date,
-                         installed_by=EXCLUDED.installed_by,
-                         last_service_date=EXCLUDED.last_service_date,
-                         next_service_due=EXCLUDED.next_service_due,
-                         is_active=EXCLUDED.is_active,
-                         last_updated=NOW()
+                    """
+                    INSERT INTO screens(screen_id, property_id, screen_location, installed_by, installed_date, last_service_date, next_service_due, is_active, last_updated)
+                    VALUES(:sid,:pid,:loc,:by,:idate,:lsd,:nsd,:act,NOW())
+                    ON CONFLICT(screen_id) DO UPDATE SET
+                      property_id=EXCLUDED.property_id,
+                      screen_location=EXCLUDED.screen_location,
+                      installed_by=EXCLUDED.installed_by,
+                      installed_date=EXCLUDED.installed_date,
+                      last_service_date=EXCLUDED.last_service_date,
+                      next_service_due=EXCLUDED.next_service_due,
+                      is_active=EXCLUDED.is_active,
+                      last_updated=NOW()
                     """,
                     {
-                        "screen_id": screen_id,
-                        "property_id": property_id,
-                        "screen_location": screen_location,
-                        "installed_date": installed_date,
-                        "installed_by": installed_by,
-                        "last_service_date": last_service_date,
-                        "next_service_due": next_service_due,
-                        "is_active": 1 if is_active else 0,
+                        "sid": screen_id,
+                        "pid": property_id,
+                        "loc": screen_location,
+                        "by": installed_by,
+                        "idate": installed_date or None,
+                        "lsd": last_service_date or None,
+                        "nsd": next_service_due or None,
+                        "act": 1 if is_active else 0,
                     },
                 )
-                audit(USER, "UPSERT_SCREEN", f"{SECTION} {screen_id}")
+                audit(USER, "UPSERT_SCREEN", f"{screen_id}")
                 st.success("Saved.")
                 st.rerun()
-
 elif PAGE_KEY == "Service Center":
     page_title("🛠 Service Center", "Upcoming service due list + mark serviced quickly.")
 
