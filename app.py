@@ -226,6 +226,35 @@ def init_db_once():
       updated_at TIMESTAMP DEFAULT NOW(),
       last_login_at TIMESTAMP
     )""")
+   
+    # ---------- Leads Master (fast DB search) ----------
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS leads_master(
+      record_hash TEXT PRIMARY KEY,
+      district TEXT,
+      city TEXT,
+      property_name TEXT,
+      property_address TEXT,
+      promoter_name TEXT,
+      promoter_mobile TEXT,
+      promoter_email TEXT,
+      mobile_norm TEXT,
+      search_text TEXT,
+      source_version TEXT,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )""")
+
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_leads_master_city ON leads_master(city)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_leads_master_district ON leads_master(district)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_leads_master_updated ON leads_master(updated_at DESC)")
+
+    # Trigram search for fast ILIKE '%text%' (Postgres)
+       try:
+        exec_sql("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        exec_sql("CREATE INDEX IF NOT EXISTS idx_leads_master_search_trgm ON leads_master USING gin (search_text gin_trgm_ops)")
+    except Exception:
+        # If extension not allowed, app will still work (just slower search)
+        pass
 
     exec_sql("""
     CREATE TABLE IF NOT EXISTS permissions(
@@ -521,6 +550,69 @@ SCOPE = AUTH.get("scope", SCOPE_BOTH)
 # =========================================================
 # DATA HELPERS (FAST + CACHED PREP)
 # =========================================================
+def build_search_text(df: pd.DataFrame) -> pd.Series:
+    return (
+        df["Property Name"] + " | " +
+        df["Property Address"] + " | " +
+        df["Promoter / Developer Name"] + " | " +
+        df["Promoter Email"] + " | " +
+        df["Promoter Mobile Number"] + " | " +
+        df["District"] + " | " +
+        df["City"]
+    ).str.lower()
+
+
+def upsert_leads_master(leads_df: pd.DataFrame, source_version: str, batch_size: int = 2000):
+    df = leads_df.copy()
+
+    df["district"] = df["District"].fillna("").astype(str)
+    df["city"] = df["City"].fillna("").astype(str)
+    df["property_name"] = df["Property Name"].fillna("").astype(str)
+    df["property_address"] = df["Property Address"].fillna("").astype(str)
+    df["promoter_name"] = df["Promoter / Developer Name"].fillna("").astype(str)
+    df["promoter_mobile"] = df["Promoter Mobile Number"].fillna("").astype(str)
+    df["promoter_email"] = df["Promoter Email"].fillna("").astype(str)
+
+    df["mobile_norm"] = normalize_mobile_series(df["Promoter Mobile Number"])
+    df["search_text"] = build_search_text(df)
+    df["record_hash"] = df["__hash"].astype(str)
+    df["source_version"] = source_version
+
+    cols = [
+        "record_hash","district","city","property_name","property_address",
+        "promoter_name","promoter_mobile","promoter_email","mobile_norm",
+        "search_text","source_version"
+    ]
+
+    payload = df[cols].drop_duplicates("record_hash").to_dict("records")
+
+    sql = text("""
+      INSERT INTO leads_master(
+        record_hash,district,city,property_name,property_address,
+        promoter_name,promoter_mobile,promoter_email,mobile_norm,search_text,source_version,updated_at
+      )
+      VALUES(
+        :record_hash,:district,:city,:property_name,:property_address,
+        :promoter_name,:promoter_mobile,:promoter_email,:mobile_norm,:search_text,:source_version,NOW()
+      )
+      ON CONFLICT(record_hash) DO UPDATE SET
+        district=EXCLUDED.district,
+        city=EXCLUDED.city,
+        property_name=EXCLUDED.property_name,
+        property_address=EXCLUDED.property_address,
+        promoter_name=EXCLUDED.promoter_name,
+        promoter_mobile=EXCLUDED.promoter_mobile,
+        promoter_email=EXCLUDED.promoter_email,
+        mobile_norm=EXCLUDED.mobile_norm,
+        search_text=EXCLUDED.search_text,
+        source_version=EXCLUDED.source_version,
+        updated_at=NOW()
+    """)
+
+    for i in range(0, len(payload), batch_size):
+        with db_engine().begin() as conn:
+            conn.execute(sql, payload[i:i+batch_size])
+
 def normalize_mobile_series(s: pd.Series) -> pd.Series:
     s = s.fillna("").astype(str)
     s = s.str.replace(r"[^0-9+]", "", regex=True).str.replace("+91", "", regex=False)
@@ -625,7 +717,7 @@ def prepare_leads_from_bytes(file_bytes: bytes, filename: str, excel_sheet: str 
     return df
 
 
-def read_leads_file(upload=None) -> tuple[pd.DataFrame, str]:
+def read_leads_file(upload=None):
     """
     Returns (prepared_df, version_key)
     version_key changes only when underlying file changes.
@@ -634,18 +726,22 @@ def read_leads_file(upload=None) -> tuple[pd.DataFrame, str]:
         if not os.path.exists(DATA_FILE):
             st.error(f"Missing {DATA_FILE}. Upload a file OR add {DATA_FILE} next to app.py.")
             st.stop()
-        sig = _local_file_signature(DATA_FILE)
+
         file_bytes = Path(DATA_FILE).read_bytes()
         filename = DATA_FILE.lower()
         excel_sheet = None
-        version_key = f"local:{sig}"
+
+        sig = _local_file_signature(DATA_FILE)
+        content_hash = hashlib.sha256(file_bytes).hexdigest()[:16]
+        version_key = f"local:{sig}:{content_hash}"
+
     else:
         file_bytes = upload.getvalue()
         filename = upload.name.lower()
-        # version based on content hash (fast, stable)
+        excel_sheet = None
+
         content_hash = hashlib.sha256(file_bytes).hexdigest()[:16]
         version_key = f"upload:{filename}:{content_hash}"
-        excel_sheet = None
 
         if filename.endswith(".xlsx") or filename.endswith(".xls"):
             xl = pd.ExcelFile(io.BytesIO(file_bytes))
@@ -653,7 +749,6 @@ def read_leads_file(upload=None) -> tuple[pd.DataFrame, str]:
 
     df = prepare_leads_from_bytes(file_bytes, filename, excel_sheet)
     return df, version_key
-
 
 # =========================================================
 # PROPERTY CODES (READ CACHED, INSERT ONLY WHEN MISSING)
