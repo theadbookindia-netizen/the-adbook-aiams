@@ -186,6 +186,9 @@ def db_engine():
         pool_size=3,
         max_overflow=2,
         pool_timeout=30,
+        # Supabase Pooler / PgBouncer (transaction pooling) + psycopg3:
+        # Disable prepared statements to avoid DuplicatePreparedStatement / InvalidSqlStatementName
+        connect_args={"prepare_threshold": 0},
     )
 
 
