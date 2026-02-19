@@ -1725,7 +1725,7 @@ elif PAGE_KEY == "Ad Sales Inventory":
     ad = qdf(sql, params)
 
     st.markdown(f"<span class='badge badge-strong'>Records: {len(ad):,}</span>", unsafe_allow_html=True)
-   ad = pd.DataFrame()
+    ad = pd.DataFrame()
     t1,t2 = st.tabs(["📋 View", "➕ Add / Edit"])
     with t1:
         st.dataframe(ad, width='stretch', height=520)
