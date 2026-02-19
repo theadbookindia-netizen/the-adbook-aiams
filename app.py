@@ -178,18 +178,14 @@ def db_engine():
         st.error("DATABASE_URL not found. Add it in Streamlit Secrets or environment variable.")
         st.stop()
 
-    # Recommended scheme for SQLAlchemy + psycopg3
-    if "postgresql+psycopg://" not in db_url and db_url.startswith("postgres"):
-        st.warning("Tip: Use 'postgresql+psycopg://' in DATABASE_URL for best compatibility on Streamlit Cloud.")
+    # Recommended scheme for SQLAlchemy + psycopg2 (stable with Supabase Pooler/PgBouncer)
+    if "postgresql+psycopg2://" not in db_url and db_url.startswith("postgres"):
+        st.warning("Tip: Use 'postgresql+psycopg2://' in DATABASE_URL for best compatibility on Streamlit Cloud.")
 
     return create_engine(
         db_url,
         pool_pre_ping=True,
         poolclass=NullPool,  # safest with Supabase Pooler/PgBouncer
-        connect_args={
-            # psycopg3 option: disables prepared statements (fixes _pg3_* errors with pooler)
-            "prepare_threshold": 0
-        },
     )
 
 
@@ -211,6 +207,7 @@ def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
         st.error("Database error while reading data.")
         st.code(str(e))
         st.stop()
+
 
 # =========================================================
 # MIGRATIONS + SEED (RUN ONCE PER SERVER)
