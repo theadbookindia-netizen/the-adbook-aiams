@@ -2,22 +2,21 @@ import os
 import re
 import io
 import uuid
-import json
 import hashlib
 from datetime import date, timedelta
+from pathlib import Path
 from urllib.parse import quote_plus
+from io import BytesIO
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 # ---- PDF (Cloud-safe) ----
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from io import BytesIO
 
 
 # =========================================================
@@ -26,147 +25,8 @@ from io import BytesIO
 APP_TITLE = "The Adbook — AIAMS (Supabase)"
 WEBSITE_URL = "https://theadbookoutdoor.com/"
 DATA_FILE = "property_data.csv"
-
-st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="🟧")
-
-st.markdown(
-    """
-<style>
-:root{
-  --bg:#ffffff; --surface:#ffffff; --surface2:#f6f8fb; --border:#e6e8ef;
-  --text:#0f172a; --muted:#475569; --accent:#0f5b66; --warn:#b45309; --danger:#b91c1c;
-}
-.block-container{max-width:1560px;padding-top:.65rem;padding-bottom:2rem;}
-[data-testid="stAppViewContainer"]{background:var(--bg);}
-[data-testid="stHeader"]{background:rgba(255,255,255,.92);border-bottom:1px solid var(--border);}
-[data-testid="stSidebar"]{background:var(--surface2);border-right:1px solid var(--border);}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:14px;box-shadow:0 8px 24px rgba(15,23,42,.06);}
-.card-tight{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px;}
-.small{color:var(--muted);font-size:.92rem;}
-.section{font-weight:850;font-size:1.05rem;margin:0 0 .25rem 0;}
-.kpi{background:#fff;border:1px solid var(--border);border-radius:16px;padding:10px 12px;}
-.kpi .label{color:var(--muted);font-size:.85rem;margin-bottom:2px;}
-.kpi .val{font-weight:850;font-size:1.25rem;color:var(--text);}
-.sticky-wrap{position:sticky;top:0;z-index:999;background:rgba(255,255,255,.96);backdrop-filter:blur(6px);
-  border-bottom:1px solid var(--border);padding:8px 0 10px 0;margin-bottom:10px;}
-div.stButton>button{width:100%;border-radius:12px;padding:.65rem .9rem;font-weight:650;border:1px solid var(--border);}
-div.stButton>button[kind="primary"]{background:var(--accent);color:#fff;border:1px solid rgba(15,91,102,.35);}
-hr{border:0;border-top:1px solid var(--border);margin:1rem 0;}
-</style>
-""",
-    unsafe_allow_html=True,
-)
-# =========================================================
-# ---------------- Branding / UI ----------------
-# =========================================================
-
-import base64
-from pathlib import Path
-
-APP_TITLE = APP_TITLE if "APP_TITLE" in globals() else "The Adbook — AIAMS"
 LOGO_PATH = "assets/logo.png"
 
-def _img_to_base64(path: str) -> str:
-    """Convert local image to base64 so it can be shown inside HTML safely on Streamlit Cloud."""
-    p = Path(path)
-    if not p.exists():
-        return ""
-    data = p.read_bytes()
-    return base64.b64encode(data).decode("utf-8")
-
-# Must be FIRST Streamlit call
-st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="🟧")
-
-# CSS theme
-st.markdown("""
-<style>
-:root{
-  --bg:#ffffff; --surface:#ffffff; --surface2:#f6f8fb; --border:#e6e8ef;
-  --text:#0f172a; --muted:#475569; --accent:#0f5b66; --accent2:#0b3d45;
-  --warn:#b45309; --danger:#b91c1c; --ok:#15803d;
-}
-.block-container{max-width:1560px;padding-top:.65rem;padding-bottom:2rem;}
-[data-testid="stAppViewContainer"]{background:var(--bg);}
-[data-testid="stHeader"]{background:rgba(255,255,255,.92);border-bottom:1px solid var(--border);}
-[data-testid="stSidebar"]{background:var(--surface2);border-right:1px solid var(--border);}
-
-.card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:14px;box-shadow:0 8px 24px rgba(15,23,42,.06);}
-.card-tight{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px;}
-.small{color:var(--muted);font-size:.92rem;}
-.section{font-weight:850;font-size:1.05rem;margin:0 0 .25rem 0;}
-
-.kpi{background:#fff;border:1px solid var(--border);border-radius:16px;padding:10px 12px;}
-.kpi .label{color:var(--muted);font-size:.85rem;margin-bottom:2px;}
-.kpi .val{font-weight:850;font-size:1.25rem;color:var(--text);}
-
-.badge{display:inline-block;padding:5px 10px;border-radius:999px;border:1px solid var(--border);background:#fff;color:var(--muted);font-size:.82rem;margin-right:6px;margin-bottom:6px;}
-.badge-strong{border-color:rgba(15,91,102,.25);background:rgba(15,91,102,.06);color:var(--accent);}
-.badge-warn{border-color:rgba(180,83,9,.25);background:rgba(180,83,9,.08);color:var(--warn);}
-.badge-danger{border-color:rgba(185,28,28,.25);background:rgba(185,28,28,.08);color:var(--danger);}
-
-.sticky-wrap{
-  position:sticky;top:0;z-index:999;background:rgba(255,255,255,.96);
-  backdrop-filter:blur(6px);
-  border-bottom:1px solid var(--border);
-  padding:8px 0 10px 0;margin-bottom:10px;
-}
-
-div.stButton>button{
-  width:100%;border-radius:12px;padding:.65rem .9rem;
-  font-weight:650;border:1px solid var(--border);
-}
-div.stButton>button[kind="primary"]{
-  background:var(--accent);color:#fff;border:1px solid rgba(15,91,102,.35);
-}
-hr{border:0;border-top:1px solid var(--border);margin:1rem 0;}
-
-.brandbar{
-  display:flex;align-items:center;gap:12px;
-  padding:10px 14px;border:1px solid var(--border);
-  border-radius:18px;background:#fff;
-  box-shadow:0 8px 24px rgba(15,23,42,.06);
-  margin-bottom:10px;
-}
-.brandbar .title{font-weight:900;font-size:1.2rem;color:var(--text);line-height:1;}
-.brandbar .sub{color:var(--muted);font-size:.92rem;margin-top:2px;}
-.brandbar img{height:44px; width:auto;}
-
-@media (max-width: 900px){
-  .block-container{padding-left:0.85rem;padding-right:0.85rem;}
-  .brandbar img{height:38px;}
-}
-</style>
-""", unsafe_allow_html=True)
-
-# Top brand header (with logo)
-logo_b64 = _img_to_base64(LOGO_PATH)
-if logo_b64:
-    logo_html = f"<img src='data:image/png;base64,{logo_b64}'/>"
-else:
-    logo_html = "<div style='width:44px;height:44px;border-radius:10px;background:rgba(15,91,102,.08);border:1px solid #e6e8ef;'></div>"
-
-st.markdown(f"""
-<div class="brandbar">
-  {logo_html}
-  <div>
-    <div class="title">The Adbook AIAMS</div>
-    <div class="sub">Inventory • Agreements • WhatsApp • Proposals • Reports</div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# Sidebar logo + title
-with st.sidebar:
-    if Path(LOGO_PATH).exists():
-        st.image(LOGO_PATH, use_container_width=True)
-    st.markdown("### The Adbook AIAMS")
-    st.caption("Outdoor Media Operations System")
-    st.markdown("---")
-
-
-# =========================================================
-# ROLES / PERMS
-# =========================================================
 SECTION_INSTALL = "Installation"
 SECTION_ADS = "Advertisement"
 SCOPE_BOTH = "Both"
@@ -216,34 +76,111 @@ UPLOAD_SIG = os.path.join(UPLOAD_ROOT, "signatures")
 os.makedirs(UPLOAD_INSTALL, exist_ok=True)
 os.makedirs(UPLOAD_SIG, exist_ok=True)
 
+# Must be the FIRST Streamlit call
+st.set_page_config(page_title=APP_TITLE, layout="wide", page_icon="🟧")
+
 
 # =========================================================
-# DATABASE (SUPABASE)
+# UI THEME (single CSS block, mobile-friendly)
+# =========================================================
+st.markdown(
+    """
+<style>
+:root{
+  --bg:#ffffff; --surface:#ffffff; --surface2:#f6f8fb; --border:#e6e8ef;
+  --text:#0f172a; --muted:#475569; --accent:#0f5b66; --warn:#b45309; --danger:#b91c1c; --ok:#15803d;
+}
+.block-container{max-width:1560px;padding-top:.65rem;padding-bottom:2rem;}
+[data-testid="stAppViewContainer"]{background:var(--bg);}
+[data-testid="stHeader"]{background:rgba(255,255,255,.92);border-bottom:1px solid var(--border);}
+[data-testid="stSidebar"]{background:var(--surface2);border-right:1px solid var(--border);}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:14px;box-shadow:0 8px 24px rgba(15,23,42,.06);}
+.card-tight{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px;}
+.small{color:var(--muted);font-size:.92rem;}
+.section{font-weight:850;font-size:1.05rem;margin:0 0 .25rem 0;}
+.kpi{background:#fff;border:1px solid var(--border);border-radius:16px;padding:10px 12px;}
+.kpi .label{color:var(--muted);font-size:.85rem;margin-bottom:2px;}
+.kpi .val{font-weight:850;font-size:1.25rem;color:var(--text);}
+.sticky-wrap{
+  position:sticky;top:0;z-index:999;background:rgba(255,255,255,.96);backdrop-filter:blur(6px);
+  border-bottom:1px solid var(--border);padding:8px 0 10px 0;margin-bottom:10px;
+}
+div.stButton>button{width:100%;border-radius:12px;padding:.65rem .9rem;font-weight:650;border:1px solid var(--border);}
+div.stButton>button[kind="primary"]{background:var(--accent);color:#fff;border:1px solid rgba(15,91,102,.35);}
+hr{border:0;border-top:1px solid var(--border);margin:1rem 0;}
+.brandbar{
+  display:flex;align-items:center;gap:12px;
+  padding:10px 14px;border:1px solid var(--border);
+  border-radius:18px;background:#fff;
+  box-shadow:0 8px 24px rgba(15,23,42,.06);
+  margin-bottom:10px;
+}
+.brandbar .title{font-weight:900;font-size:1.2rem;color:var(--text);line-height:1;}
+.brandbar .sub{color:var(--muted);font-size:.92rem;margin-top:2px;}
+.brandbar img{height:44px; width:auto;}
+.badge{display:inline-block;padding:5px 10px;border-radius:999px;border:1px solid var(--border);background:#fff;color:var(--muted);font-size:.82rem;margin-right:6px;margin-bottom:6px;}
+.badge-strong{border-color:rgba(15,91,102,.25);background:rgba(15,91,102,.06);color:var(--accent);}
+@media (max-width: 900px){
+  .block-container{padding-left:0.85rem;padding-right:0.85rem;}
+  .brandbar img{height:38px;}
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
+def _img_to_base64(path: str) -> str:
+    p = Path(path)
+    if not p.exists():
+        return ""
+    import base64
+    return base64.b64encode(p.read_bytes()).decode("utf-8")
+
+
+logo_b64 = _img_to_base64(LOGO_PATH)
+if logo_b64:
+    logo_html = f"<img src='data:image/png;base64,{logo_b64}'/>"
+else:
+    logo_html = "<div style='width:44px;height:44px;border-radius:10px;background:rgba(15,91,102,.08);border:1px solid #e6e8ef;'></div>"
+
+st.markdown(
+    f"""
+<div class="brandbar">
+  {logo_html}
+  <div>
+    <div class="title">The Adbook AIAMS</div>
+    <div class="sub">Inventory • Agreements • WhatsApp • Proposals • Reports</div>
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# DATABASE (SUPABASE) — optimized + fixed cache bug
 # =========================================================
 def get_database_url() -> str:
-    # Prefer Streamlit secrets
     try:
         if "DATABASE_URL" in st.secrets:
             return str(st.secrets["DATABASE_URL"]).strip()
     except Exception:
         pass
-    # Fallback env var
     return os.environ.get("DATABASE_URL", "").strip()
 
 
 @st.cache_resource(show_spinner=False)
 def db_engine():
-    engine = db_engine
     db_url = get_database_url()
     if not db_url:
-        st.error("DATABASE_URL not found. Add it in Streamlit Secrets.")
+        st.error("DATABASE_URL not found. Add it in Streamlit Secrets or environment variable.")
         st.stop()
 
-    # Strongly recommend psycopg driver
-    if "postgresql+psycopg://" not in db_url:
+    if "postgresql+psycopg://" not in db_url and db_url.startswith("postgres"):
         st.warning("Tip: Use 'postgresql+psycopg://' in DATABASE_URL for best compatibility on Streamlit Cloud.")
 
-    # Small pool + pre_ping
+    # Small pool, pre_ping for reliability
     return create_engine(
         db_url,
         pool_pre_ping=True,
@@ -273,8 +210,10 @@ def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
         st.stop()
 
 
+# =========================================================
+# MIGRATIONS (unchanged tables)
+# =========================================================
 def migrate() -> None:
-    # Users
     exec_sql("""
     CREATE TABLE IF NOT EXISTS users(
       username TEXT PRIMARY KEY,
@@ -285,10 +224,8 @@ def migrate() -> None:
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW(),
       last_login_at TIMESTAMP
-    )
-    """)
+    )""")
 
-    # Permissions
     exec_sql("""
     CREATE TABLE IF NOT EXISTS permissions(
       id TEXT PRIMARY KEY,
@@ -300,10 +237,8 @@ def migrate() -> None:
       can_delete INTEGER NOT NULL DEFAULT 0,
       can_export INTEGER NOT NULL DEFAULT 0,
       updated_at TIMESTAMP DEFAULT NOW()
-    )
-    """)
+    )""")
 
-    # Audit
     exec_sql("""
     CREATE TABLE IF NOT EXISTS audit_logs(
       log_id TEXT PRIMARY KEY,
@@ -311,10 +246,8 @@ def migrate() -> None:
       action_type TEXT,
       details TEXT,
       created_at TIMESTAMP DEFAULT NOW()
-    )
-    """)
+    )""")
 
-    # Property codes
     exec_sql("""
     CREATE TABLE IF NOT EXISTS property_codes(
       property_id TEXT PRIMARY KEY,
@@ -323,10 +256,8 @@ def migrate() -> None:
       city TEXT,
       property_name TEXT,
       created_at TIMESTAMP DEFAULT NOW()
-    )
-    """)
+    )""")
 
-    # Lead updates
     exec_sql("""
     CREATE TABLE IF NOT EXISTS lead_updates(
       record_hash TEXT NOT NULL,
@@ -340,10 +271,8 @@ def migrate() -> None:
       last_call_at TIMESTAMP,
       last_updated TIMESTAMP DEFAULT NOW(),
       PRIMARY KEY(record_hash, section)
-    )
-    """)
+    )""")
 
-    # Inventory
     exec_sql("""
     CREATE TABLE IF NOT EXISTS inventory_sites(
       property_id TEXT PRIMARY KEY,
@@ -366,10 +295,8 @@ def migrate() -> None:
       agreed_rent_pm DOUBLE PRECISION,
       notes TEXT,
       last_updated TIMESTAMP DEFAULT NOW()
-    )
-    """)
+    )""")
 
-    # Screens
     exec_sql("""
     CREATE TABLE IF NOT EXISTS screens(
       screen_id TEXT PRIMARY KEY,
@@ -381,10 +308,8 @@ def migrate() -> None:
       next_service_due TEXT,
       is_active INTEGER DEFAULT 1,
       last_updated TIMESTAMP DEFAULT NOW()
-    )
-    """)
+    )""")
 
-    # Documents
     exec_sql("""
     CREATE TABLE IF NOT EXISTS documents_install(
       doc_id TEXT PRIMARY KEY,
@@ -395,10 +320,8 @@ def migrate() -> None:
       expiry_date TEXT,
       uploaded_by TEXT,
       uploaded_at TIMESTAMP DEFAULT NOW()
-    )
-    """)
+    )""")
 
-    # Proposals
     exec_sql("""
     CREATE TABLE IF NOT EXISTS proposals(
       proposal_id TEXT PRIMARY KEY,
@@ -409,10 +332,8 @@ def migrate() -> None:
       created_at TIMESTAMP DEFAULT NOW(),
       pdf_filename TEXT,
       status TEXT
-    )
-    """)
+    )""")
 
-    # WhatsApp logs
     exec_sql("""
     CREATE TABLE IF NOT EXISTS whatsapp_logs(
       log_id TEXT PRIMARY KEY,
@@ -420,10 +341,8 @@ def migrate() -> None:
       username TEXT,
       action_status TEXT,
       created_at TIMESTAMP DEFAULT NOW()
-    )
-    """)
+    )""")
 
-    # Company settings
     exec_sql("""
     CREATE TABLE IF NOT EXISTS company_settings(
       settings_id TEXT PRIMARY KEY,
@@ -431,10 +350,8 @@ def migrate() -> None:
       bank_details TEXT,
       whatsapp_limit_per_hour INTEGER DEFAULT 50,
       updated_at TIMESTAMP DEFAULT NOW()
-    )
-    """)
+    )""")
 
-    # User profiles (signature)
     exec_sql("""
     CREATE TABLE IF NOT EXISTS user_profiles(
       username TEXT PRIMARY KEY,
@@ -443,8 +360,7 @@ def migrate() -> None:
       mobile TEXT,
       email TEXT,
       updated_at TIMESTAMP DEFAULT NOW()
-    )
-    """)
+    )""")
 
 
 def seed_permissions_once():
@@ -474,7 +390,7 @@ seed_permissions_once()
 
 
 # =========================================================
-# AUTH (PBKDF2) + SIMPLE PLAIN$ SUPPORT FOR FIRST TIME
+# AUTH (PBKDF2) + plain$ support
 # =========================================================
 def pbkdf2_hash(password: str, salt: str | None = None) -> str:
     salt = salt or uuid.uuid4().hex
@@ -483,15 +399,9 @@ def pbkdf2_hash(password: str, salt: str | None = None) -> str:
 
 
 def pbkdf2_verify(password: str, stored: str) -> bool:
-    """
-    Supports:
-    - pbkdf2_sha256$SALT$HASH (secure)
-    - plain$yourpassword      (easy first-time setup)
-    """
     try:
         if stored.startswith("plain$"):
             return password == stored.split("$", 1)[1]
-
         alg, salt, hexhash = stored.split("$", 2)
         if alg != "pbkdf2_sha256":
             return False
@@ -516,7 +426,7 @@ def set_last_login(username: str):
     exec_sql("UPDATE users SET last_login_at=NOW(), updated_at=NOW() WHERE username=:u", {"u": username})
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=120)
 def load_permissions():
     return qdf("SELECT role, section, can_view, can_add, can_edit, can_delete, can_export FROM permissions")
 
@@ -562,15 +472,10 @@ def bootstrap_if_no_users():
         if not u.strip() or not p:
             st.error("Username and password required.")
             st.stop()
-        if mode.startswith("Secure"):
-            ph = pbkdf2_hash(p)
-        else:
-            ph = "plain$" + p  # easy first-time, can upgrade later
+        ph = pbkdf2_hash(p) if mode.startswith("Secure") else "plain$" + p
         exec_sql(
-            """
-            INSERT INTO users(username,password_hash,role,section_scope,is_active)
-            VALUES(:u,:p,:r,'Both',1)
-            """,
+            """INSERT INTO users(username,password_hash,role,section_scope,is_active)
+               VALUES(:u,:p,:r,'Both',1)""",
             {"u": u.strip(), "p": ph, "r": ROLE_SUPERADMIN},
         )
         audit(u.strip(), "BOOTSTRAP_ADMIN", "created first SuperAdmin")
@@ -584,7 +489,6 @@ bootstrap_if_no_users()
 def require_auth():
     if "auth" in st.session_state:
         return
-
     with st.sidebar:
         st.markdown("### 🔐 Login")
         u = st.text_input("Username").strip()
@@ -606,38 +510,26 @@ USER = AUTH["user"]
 ROLE = AUTH["role"]
 SCOPE = AUTH.get("scope", SCOPE_BOTH)
 
-# =========================================================
-# DATA HELPERS
-# =========================================================
-import io
-import os
-import re
-import hashlib
-import numpy as np
-import pandas as pd
-import streamlit as st
-from urllib.parse import quote_plus
 
-# DATA_FILE should already exist in your app (keep your existing value)
-# Example:
-# DATA_FILE = "property_data.csv"
+# =========================================================
+# DATA HELPERS (FAST)
+# =========================================================
+def normalize_mobile_series(s: pd.Series) -> pd.Series:
+    s = s.fillna("").astype(str)
+    s = s.str.replace(r"[^0-9+]", "", regex=True).str.replace("+91", "", regex=False)
+    s = s.str.replace(r"\D", "", regex=True)
+    # last 10 digits if longer
+    return s.apply(lambda x: x[-10:] if len(x) > 10 else x)
+
 
 @st.cache_data(show_spinner=False)
 def _read_csv_bytes(file_bytes: bytes) -> pd.DataFrame:
-    """Robust CSV loader that tries common encodings and never crashes."""
     encodings_to_try = ["utf-8-sig", "utf-8", "cp1252", "latin1"]
     for enc in encodings_to_try:
         try:
-            return pd.read_csv(
-                io.BytesIO(file_bytes),
-                encoding=enc,
-                dtype=str,
-                low_memory=False,
-            )
+            return pd.read_csv(io.BytesIO(file_bytes), encoding=enc, dtype=str, low_memory=False)
         except UnicodeDecodeError:
             continue
-
-    # Final fallback: skip broken rows, replace bad chars
     return pd.read_csv(
         io.BytesIO(file_bytes),
         encoding="latin1",
@@ -647,274 +539,148 @@ def _read_csv_bytes(file_bytes: bytes) -> pd.DataFrame:
         on_bad_lines="skip",
     )
 
+
 @st.cache_data(show_spinner=False)
-def _read_excel_bytes(file_bytes: bytes, sheet_name: str) -> pd.DataFrame:
-    return pd.read_excel(
-        io.BytesIO(file_bytes),
-        sheet_name=sheet_name,
-        dtype=str,
-        engine="openpyxl",
-    )
+def _read_excel_sheet(file_bytes: bytes, sheet_name: str) -> pd.DataFrame:
+    return pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name, dtype=str, engine="openpyxl")
+
 
 def read_leads_file(upload=None) -> pd.DataFrame:
-    """
-    Reads either:
-    - uploaded CSV/XLSX
-    - or local DATA_FILE if upload is None
-    """
-    # 1) Get file bytes + filename
     if upload is None:
         if not os.path.exists(DATA_FILE):
-            st.error(
-                f"Missing {DATA_FILE}. Either upload a CSV/Excel OR add {DATA_FILE} to the repo next to app.py."
-            )
+            st.error(f"Missing {DATA_FILE}. Upload a file OR add {DATA_FILE} next to app.py.")
             st.stop()
-        with open(DATA_FILE, "rb") as f:
-            file_bytes = f.read()
+        file_bytes = Path(DATA_FILE).read_bytes()
         filename = DATA_FILE.lower()
     else:
         file_bytes = upload.getvalue()
         filename = upload.name.lower()
 
-    # 2) Load into DataFrame
     if filename.endswith(".csv"):
         df = _read_csv_bytes(file_bytes)
-
     elif filename.endswith(".xlsx") or filename.endswith(".xls"):
-        # Sheet chooser must be OUTSIDE cached function
         xl = pd.ExcelFile(io.BytesIO(file_bytes))
         sheet = st.selectbox("Select sheet", xl.sheet_names, key="sheet_picker")
-        df = _read_excel_bytes(file_bytes, sheet)
-
+        df = _read_excel_sheet(file_bytes, sheet)
     else:
         st.error("Unsupported file. Please upload CSV or Excel (.xlsx).")
         st.stop()
 
-    # 3) Clean columns
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Your rename rule
     if "District Type" in df.columns and "City" not in df.columns:
         df = df.rename(columns={"District Type": "City"})
 
     return df
 
 
-def norm(x):
-    if x is None or (isinstance(x, float) and np.isnan(x)):
-        return ""
-    return str(x).strip()
-
-
-def normalize_mobile(x):
-    x = "" if x is None else str(x)
-    x = re.sub(r"[^0-9+]", "", x).replace("+91", "")
-    x = re.sub(r"\D", "", x)
-    if len(x) > 10:
-        x = x[-10:]
-    return x
-
-
-def make_hash(prop, addr, dist, city, mobile, email):
-    s = "||".join([prop, addr, dist, city, mobile, email]).lower().encode("utf-8", errors="ignore")
-    return hashlib.sha256(s).hexdigest()
-
-
-def whatsapp_url(mobile, message):
-    m = normalize_mobile(mobile)
-    if not m:
-        return "#"
-    return f"https://wa.me/91{m}?text={quote_plus(message)}"
-
-
-# =========================================================
-# PROPERTY CODES (FAST BULK)
-# =========================================================
-
 def _letters2(x) -> str:
-    """
-    Always returns 2 letters.
-    Works even if x is None / NaN / number.
-    """
-    try:
-        if x is None or (hasattr(pd, "isna") and pd.isna(x)):
-            s = ""
-        else:
-            s = str(x)
-    except Exception:
-        s = ""
+    s = "" if x is None else str(x)
     s = s.upper()
     s = re.sub(r"[^A-Za-z]", "", s)
     return (s + "XX")[:2]
 
 
-def ensure_property_codes(leads_df: pd.DataFrame, batch_size: int = 500) -> pd.DataFrame:
-    """
-    FAST bulk code generation.
+@st.cache_data(show_spinner=False, ttl=120)
+def get_property_codes_df() -> pd.DataFrame:
+    return qdf("SELECT property_id, property_code, district, city, property_name FROM property_codes")
 
-    Strategy:
-    1) Build list of needed property_ids from leads_df.
-    2) Read existing property_codes table ONCE.
-    3) For each prefix (District+City), compute next available number in memory.
-    4) Insert in batches.
-    5) If rare duplicate happens, retry with next number.
-    """
 
-    # 1) Need list
+def ensure_property_codes(leads_df: pd.DataFrame, batch_size: int = 700) -> pd.DataFrame:
+    """
+    Faster: only inserts missing property_ids.
+    Uses cached read of property_codes with TTL.
+    """
     needed = leads_df[["__hash", "District", "City", "Property Name"]].drop_duplicates().copy()
     needed.columns = ["property_id", "district", "city", "property_name"]
 
-    # 2) Read existing codes once
-    existing = qdf("SELECT property_id, property_code FROM property_codes")
-    existing_map = {}
-    used_by_prefix = {}  # {"AHAH": set([1,2,3])}
+    existing = get_property_codes_df()
+    existing_ids = set(existing["property_id"].astype("string").tolist()) if len(existing) else set()
 
+    missing = needed[~needed["property_id"].astype("string").isin(existing_ids)]
+    if len(missing) == 0:
+        return existing
+
+    # Build used numbers per prefix
+    used_by_prefix = {}
     if len(existing):
-        for pid, pcode in zip(existing["property_id"].astype("string"), existing["property_code"].astype("string")):
-            if pid and pcode and pcode != "nan":
-                existing_map[str(pid)] = str(pcode)
+        pc = existing["property_code"].astype("string").fillna("")
+        pref = pc.str.slice(0, 4)
+        num = pd.to_numeric(pc.str.slice(4, 7), errors="coerce")
+        ok = pref.str.match(r"^[A-Z]{4}$", na=False) & num.notna()
+        for p, n in zip(pref[ok], num[ok].astype(int)):
+            used_by_prefix.setdefault(p, set()).add(int(n))
 
-            # Track used numbers per prefix (e.g., AHAH001 -> prefix=AHAH, num=1)
-            pc = str(pcode or "")
-            if len(pc) >= 7 and pc[:4].isalpha() and pc[4:7].isdigit():
-                pref = pc[:4]
-                num = int(pc[4:7])
-                used_by_prefix.setdefault(pref, set()).add(num)
-
-    # helper: next available number for a prefix
-    next_num = {}  # {"AHAH": 4}
-    def _next_for_prefix(pref: str) -> int:
+    next_num = {}
+    def next_for(pref: str) -> int:
         if pref not in next_num:
-            if pref in used_by_prefix and used_by_prefix[pref]:
-                next_num[pref] = max(used_by_prefix[pref]) + 1
-            else:
-                next_num[pref] = 1
+            next_num[pref] = (max(used_by_prefix.get(pref, {0})) + 1) if used_by_prefix.get(pref) else 1
         return next_num[pref]
 
     inserts = []
-
-    # 3) Create codes in memory (no DB calls here)
-    for r in needed.to_dict("records"):
-        pid = str(r["property_id"])
-
-        # already mapped -> skip
-        if pid in existing_map and existing_map[pid] and existing_map[pid] != "nan":
-            continue
-
+    for r in missing.to_dict("records"):
         district = r.get("district", "") or ""
         city = r.get("city", "") or ""
         pname = r.get("property_name", "") or ""
-
+        pid = str(r["property_id"])
         pref = _letters2(district) + _letters2(city)
 
-        n = _next_for_prefix(pref)
-        # ensure not used
+        n = next_for(pref)
         while n in used_by_prefix.get(pref, set()):
             n += 1
-
         code = f"{pref}{n:03d}"
-
-        # reserve number in memory
         used_by_prefix.setdefault(pref, set()).add(n)
         next_num[pref] = n + 1
 
         inserts.append({"pid": pid, "code": code, "district": district, "city": city, "pname": pname})
 
-    if not inserts:
-        return qdf("SELECT property_id, property_code FROM property_codes")
-
-    # 4) Insert in batches (fast)
-    def _insert_batch(rows):
+    if inserts:
         sql = text("""
             INSERT INTO property_codes(property_id, property_code, district, city, property_name)
             VALUES(:pid, :code, :district, :city, :pname)
             ON CONFLICT (property_id) DO NOTHING
         """)
-        with db_engine().begin() as conn:
-            conn.execute(sql, rows)
+        for i in range(0, len(inserts), batch_size):
+            batch = inserts[i:i+batch_size]
+            with db_engine().begin() as conn:
+                conn.execute(sql, batch)
 
-    # 5) Rare collision handling:
-    # If property_code unique collision happens (very rare), we retry individually.
-    for i in range(0, len(inserts), batch_size):
-        batch = inserts[i:i+batch_size]
-        try:
-            _insert_batch(batch)
-        except Exception:
-            # Retry one-by-one with incrementing number
-            for row in batch:
-                pref = row["code"][:4]
-                tries = 0
-                while True:
-                    try:
-                        with db_engine().begin() as conn:
-                            conn.execute(
-                                text("""
-                                    INSERT INTO property_codes(property_id, property_code, district, city, property_name)
-                                    VALUES(:pid, :code, :district, :city, :pname)
-                                    ON CONFLICT (property_code) DO NOTHING
-                                """),
-                                row,
-                            )
-                        # If insert did nothing, it means code existed; generate next and retry
-                        # We detect "did nothing" by checking if property_id now exists:
-                        chk = qdf("SELECT 1 FROM property_codes WHERE property_id=:p LIMIT 1", {"p": row["pid"]})
-                        if len(chk):
-                            break
-                    except Exception:
-                        pass
+        # refresh cache
+        get_property_codes_df.clear()
 
-                    tries += 1
-                    n = _next_for_prefix(pref)
-                    row["code"] = f"{pref}{n:03d}"
-                    used_by_prefix.setdefault(pref, set()).add(n)
-                    next_num[pref] = n + 1
-
-                    if tries > 50:
-                        row["code"] = pref + uuid.uuid4().hex[:3].upper()
-
-    return qdf("SELECT property_id, property_code FROM property_codes")
+    return get_property_codes_df()
 
 
 def property_display_map(code_df: pd.DataFrame, leads_df: pd.DataFrame) -> dict:
-    # Build name_map safely
     base = leads_df.drop_duplicates("__hash").set_index("__hash")
-
-    # Make sure columns exist
     if "Property Name" not in base.columns:
         base["Property Name"] = ""
     if "City" not in base.columns:
         base["City"] = ""
 
-    name_map = base[["Property Name", "City"]].to_dict("index")
-
-    def safe_text(v) -> str:
-        # Handles None, NaN, numbers, etc.
-        try:
-            if v is None or (hasattr(pd, "isna") and pd.isna(v)):
-                return ""
-        except Exception:
-            pass
-        return str(v).strip()
+    nm = base["Property Name"].fillna("").astype(str)
+    ct = base["City"].fillna("").astype(str)
+    name_map = pd.DataFrame({"nm": nm, "ct": ct})
 
     out = {}
-    for pid, code in zip(
-        code_df["property_id"].astype("string"),
-        code_df["property_code"].astype("string"),
-    ):
-        info = name_map.get(pid, {})
-        nm = safe_text(info.get("Property Name"))
-        ct = safe_text(info.get("City"))
-
-        if nm or ct:
-            out[pid] = f"{code} — {nm[:45]} — {ct}"
+    for pid, code in zip(code_df["property_id"].astype("string"), code_df["property_code"].astype("string")):
+        pid = str(pid)
+        code = str(code)
+        if pid in name_map.index:
+            n = name_map.loc[pid, "nm"]
+            c = name_map.loc[pid, "ct"]
+            label = f"{code} — {n[:45]} — {c}"
         else:
-            out[pid] = f"{code} — {str(pid)[:6]}"
+            label = f"{code} — {pid[:6]}"
+        out[pid] = label
     return out
 
+
 # =========================================================
-# LEAD UPDATES
+# LEAD UPDATES (cached)
 # =========================================================
-def list_lead_updates(section):
+@st.cache_data(show_spinner=False, ttl=30)
+def list_lead_updates(section: str) -> pd.DataFrame:
     return qdf("SELECT * FROM lead_updates WHERE section=:s", {"s": section})
 
 
@@ -935,11 +701,13 @@ def upsert_lead_update(section, record_hash, status, assigned_to, lead_source, n
         """,
         {"h": record_hash, "s": section, "st": status, "as": assigned_to, "src": lead_source, "n": notes, "fu": follow_up, "out": last_call_outcome},
     )
+    list_lead_updates.clear()  # refresh quickly
 
 
 # =========================================================
 # SETTINGS / PROFILES
 # =========================================================
+@st.cache_data(show_spinner=False, ttl=60)
 def get_company_settings():
     df = qdf("SELECT * FROM company_settings LIMIT 1")
     if len(df) == 0:
@@ -959,8 +727,10 @@ def upsert_company_settings(gst_no: str, bank_details: str, limit_per_hour: int)
         """,
         {"g": gst_no, "b": bank_details, "l": int(limit_per_hour), "id": cur["settings_id"]},
     )
+    get_company_settings.clear()
 
 
+@st.cache_data(show_spinner=False, ttl=120)
 def get_user_profile(username: str):
     df = qdf("SELECT * FROM user_profiles WHERE username=:u", {"u": username})
     if len(df) == 0:
@@ -971,10 +741,11 @@ def get_user_profile(username: str):
 
 def update_user_signature(username: str, filename: str):
     exec_sql("UPDATE user_profiles SET signature_filename=:f, updated_at=NOW() WHERE username=:u", {"u": username, "f": filename})
+    get_user_profile.clear()
 
 
 # =========================================================
-# PDF PROPOSAL (REPORTLAB)
+# PDF PROPOSAL (Reportlab)
 # =========================================================
 def next_proposal_no():
     df = qdf("SELECT MAX(proposal_no) AS m FROM proposals")
@@ -1017,7 +788,6 @@ def make_proposal_pdf_bytes(section: str, data: dict, settings: dict, signer: di
     c.drawRightString(width - left, height - 68, f"Valid till: {valid_till}")
 
     hr()
-
     title = "Installation Proposal" if section == SECTION_INSTALL else "Advertisement Proposal"
     line(title, 13, True, 18)
 
@@ -1028,14 +798,11 @@ def make_proposal_pdf_bytes(section: str, data: dict, settings: dict, signer: di
     line(f"Contact: {data.get('contact_person','')} | {data.get('contact_phone','')} | {data.get('contact_email','')}", 11, False, 16)
 
     hr()
-
     line("Scope", 11, True, 16)
-    scope_points = data.get("scope_points", []) or []
-    for s in (scope_points or ["Scope to be finalized."]):
+    for s in (data.get("scope_points", []) or ["Scope to be finalized."]):
         line(f"• {s}", 11, False, 14)
 
     hr()
-
     line("Pricing", 11, True, 16)
     pricing_rows = data.get("pricing_rows", []) or []
     if not pricing_rows:
@@ -1045,14 +812,11 @@ def make_proposal_pdf_bytes(section: str, data: dict, settings: dict, signer: di
             line(f"• {pr.get('item','')} | INR {pr.get('amount','')} | {pr.get('notes','')}", 11, False, 14)
 
     hr()
-
     line("Payment Terms", 11, True, 16)
-    payment_terms = data.get("payment_terms", []) or []
-    for p in (payment_terms or ["Payment terms to be finalized."]):
+    for p in (data.get("payment_terms", []) or ["Payment terms to be finalized."]):
         line(f"• {p}", 11, False, 14)
 
     hr()
-
     line("GST", 11, True, 16)
     line(settings.get("gst_no", "") or "Applicable as per rules.", 11, False, 16)
 
@@ -1065,14 +829,12 @@ def make_proposal_pdf_bytes(section: str, data: dict, settings: dict, signer: di
             line(bl, 11, False, 14)
 
     hr()
-
     line("For The Adbook Outdoor", 11, True, 16)
     line(f"Name: {signer.get('username','')}", 11, False, 14)
     line(f"Designation: {signer.get('designation','')}", 11, False, 14)
 
     c.setFont("Helvetica", 9)
     c.drawString(left, 30, "This proposal is system-generated by AIAMS (cloud-safe PDF).")
-
     c.save()
     return buffer.getvalue()
 
@@ -1095,9 +857,19 @@ def save_proposal_pdf(section: str, property_id: str, pdf_bytes: bytes, created_
 
 
 # =========================================================
-# SIDEBAR NAV
+# SIDEBAR NAV + USER HELP
 # =========================================================
 with st.sidebar:
+    if Path(LOGO_PATH).exists():
+        st.image(LOGO_PATH, use_container_width=True)
+    st.markdown("### The Adbook AIAMS")
+    st.caption("Outdoor Media Operations System")
+    st.markdown("---")
+
+    st.markdown("**Quick Instructions**")
+    st.caption("• Use Home for fast search\n• Use Leads to update status\n• Use Inventory/Screens/Documents for Installation\n• Use WhatsApp for click-to-chat")
+    st.markdown("---")
+
     st.markdown("### AIAMS")
     st.markdown(f"**User:** {USER}")
     st.markdown(f"**Role:** {ROLE_LABEL.get(ROLE, ROLE)}")
@@ -1123,44 +895,65 @@ with st.sidebar:
 
 
 # =========================================================
-# LOAD LEADS + HASHES
+# LOAD LEADS (FAST + CACHED) + VECTOR HASH
 # =========================================================
 leads_df = read_leads_file(upload).copy()
 
-for col in ["District", "City", "Property Name", "Property Address", "Promoter Mobile Number", "Promoter Email", "Promoter / Developer Name"]:
+required_cols = [
+    "District", "City", "Property Name", "Property Address",
+    "Promoter Mobile Number", "Promoter Email", "Promoter / Developer Name"
+]
+for col in required_cols:
     if col not in leads_df.columns:
         leads_df[col] = ""
 
-leads_df["__hash"] = [
-    make_hash(
-        norm(r.get("Property Name")),
-        norm(r.get("Property Address")),
-        norm(r.get("District")),
-        norm(r.get("City")),
-        normalize_mobile(r.get("Promoter Mobile Number")),
-        norm(r.get("Promoter Email")),
-    )
-    for r in leads_df.to_dict("records")
-]
+# clean strings (vectorized)
+for c in required_cols:
+    leads_df[c] = leads_df[c].fillna("").astype(str).str.strip()
 
+leads_df["__mobile_norm"] = normalize_mobile_series(leads_df["Promoter Mobile Number"])
+
+# FAST stable hash (vectorized)
+hash_cols = pd.DataFrame({
+    "pn": leads_df["Property Name"].str.lower(),
+    "pa": leads_df["Property Address"].str.lower(),
+    "d": leads_df["District"].str.lower(),
+    "c": leads_df["City"].str.lower(),
+    "m": leads_df["__mobile_norm"],
+    "e": leads_df["Promoter Email"].str.lower(),
+})
+# uint64 hash then hex string (very fast)
+h64 = pd.util.hash_pandas_object(hash_cols, index=False)
+leads_df["__hash"] = h64.apply(lambda x: f"{int(x) & ((1<<64)-1):016x}")
+
+# Build a single search index column once (fast search)
+leads_df["__search"] = (
+    leads_df["Property Name"] + " | " +
+    leads_df["Property Address"] + " | " +
+    leads_df["Promoter / Developer Name"] + " | " +
+    leads_df["Promoter Email"] + " | " +
+    leads_df["Promoter Mobile Number"] + " | " +
+    leads_df["District"] + " | " +
+    leads_df["City"]
+).str.lower()
+
+# codes (bulk only for missing)
 codes_df = ensure_property_codes(leads_df)
 disp_map = property_display_map(codes_df, leads_df)
 pid_to_code = dict(zip(codes_df["property_id"].astype("string"), codes_df["property_code"].astype("string")))
 
+# Lead updates (cached)
 upd = list_lead_updates(SECTION)
 leads_df = leads_df.merge(upd, left_on="__hash", right_on="record_hash", how="left")
 
-leads_df["status"] = leads_df["status"].fillna("New")
-leads_df["assigned_to"] = leads_df["assigned_to"].fillna("")
-leads_df["lead_source"] = leads_df["lead_source"].fillna("Cold Call")
-leads_df["notes"] = leads_df["notes"].fillna("")
-leads_df["follow_up"] = leads_df["follow_up"].fillna("")
+for c, default in [("status", "New"), ("assigned_to", ""), ("lead_source", "Cold Call"), ("notes", ""), ("follow_up", "")]:
+    leads_df[c] = leads_df[c].fillna(default)
 
 # field/viewer: only own assigned
 if ROLE in [ROLE_INSTALL_FIELD, ROLE_ADS_FIELD, ROLE_VIEWER]:
     leads_df = leads_df[leads_df["assigned_to"].astype("string") == USER]
 
-# KPIs header
+# KPI sticky header
 st.markdown("<div class='sticky-wrap'>", unsafe_allow_html=True)
 c1, c2, c3, c4 = st.columns(4)
 with c1:
@@ -1175,32 +968,73 @@ st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =========================================================
+# UTILS
+# =========================================================
+def whatsapp_url(mobile, message):
+    m = str(mobile or "")
+    m = re.sub(r"[^0-9]", "", m)
+    if len(m) > 10:
+        m = m[-10:]
+    if not m:
+        return "#"
+    return f"https://wa.me/91{m}?text={quote_plus(message)}"
+
+
+def safe_df_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    out = df.copy()
+    for c in cols:
+        if c not in out.columns:
+            out[c] = ""
+    return out
+
+
+# =========================================================
 # PAGES
 # =========================================================
 if PAGE == "Home":
-    page_title("🏠 Home (Search)", f"{SECTION}: Search properties and contact quickly.")
-    q = st.text_input("Search (Property / Promoter / Phone / Email)")
-    df = leads_df.copy()
+    page_title("🏠 Home (Fast Search)", f"{SECTION}: Search properties quickly (optimized).")
+
+    with st.expander("How to use search + filters", expanded=False):
+        st.write(
+            "• Type any keyword (property / promoter / mobile / email / district / city)\n"
+            "• Use pagination to browse results\n"
+            "• For updates, open **Leads** page"
+        )
+
+    q = st.text_input("Search (Property / Promoter / Phone / Email)", placeholder="Type and press Enter…")
+    df = leads_df
+
     if q.strip():
         s = q.strip().lower()
-        cols = ["Property Name", "Property Address", "Promoter / Developer Name", "Promoter Email", "Promoter Mobile Number", "District", "City"]
-        mask = pd.Series(False, index=df.index)
-        for c in cols:
-            mask |= df[c].astype("string").fillna("").str.lower().str.contains(re.escape(s), na=False)
-        df = df[mask]
-    st.dataframe(
-        df[["District", "City", "Property Name", "Promoter / Developer Name", "Promoter Mobile Number", "Promoter Email", "status", "assigned_to", "follow_up"]].head(1000),
-        use_container_width=True,
-        height=560,
-    )
+        # single-column contains = fast
+        df = df[df["__search"].str.contains(re.escape(s), na=False)]
+
+    st.markdown(f"<span class='badge badge-strong'>Matches: {len(df):,}</span>", unsafe_allow_html=True)
+
+    # Pagination (huge speed help)
+    page_size = st.selectbox("Rows per page", [25, 50, 100, 200, 500], index=2)
+    total_pages = max(1, (len(df) + page_size - 1) // page_size)
+    page_no = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
+
+    start = (page_no - 1) * page_size
+    end = start + page_size
+
+    view_cols = ["District", "City", "Property Name", "Promoter / Developer Name",
+                 "Promoter Mobile Number", "Promoter Email", "status", "assigned_to", "follow_up"]
+    dfv = safe_df_cols(df, view_cols).iloc[start:end]
+
+    st.dataframe(dfv, use_container_width=True, height=560)
 
 elif PAGE == "Leads":
     page_title("🧩 Leads (Update Status)", "Open one lead and update status, notes, follow-up.")
-    if not can(SECTION, "edit", ROLE):
-        st.info("Read-only for your role.")
 
     df = leads_df.drop_duplicates("__hash").copy()
-    df["display"] = df["__hash"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
+    df["display"] = df["__hash"].astype("string").map(lambda x: disp_map.get(str(x), str(x)[:6]))
+
+    if len(df) == 0:
+        st.info("No leads available for your role/filters.")
+        st.stop()
+
     sel = st.selectbox("Select lead", df["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
     pid = str(rev.get(sel))
@@ -1220,13 +1054,17 @@ elif PAGE == "Leads":
     with c2:
         outcome = st.selectbox("Last call outcome (optional)", [""] + CALL_OUTCOMES, index=0)
         follow = st.text_input("Follow-up (date/note)", value=row.get("follow_up", ""))
+
     notes = st.text_area("Notes", value=row.get("notes", ""), height=120)
 
-    if st.button("✅ Save Update", type="primary", disabled=not can(SECTION, "edit", ROLE)):
+    save_disabled = not can(SECTION, "edit", ROLE)
+    if save_disabled:
+        st.info("Your role is read-only for edits.")
+
+    if st.button("✅ Save Update", type="primary", disabled=save_disabled):
         upsert_lead_update(SECTION, pid, status, assigned, row.get("lead_source") or "Cold Call", notes, follow, outcome or None)
         audit(USER, "LEAD_UPDATE", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} status={status}")
         st.success("Saved.")
-        st.cache_data.clear()
         st.rerun()
 
 elif PAGE == "Inventory":
@@ -1235,8 +1073,14 @@ elif PAGE == "Inventory":
         st.stop()
 
     page_title("🗂 Inventory (Sites)", "Save installed site info.")
+
     base = leads_df.drop_duplicates("__hash").copy()
-    base["display"] = base["__hash"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
+    base["display"] = base["__hash"].astype("string").map(lambda x: disp_map.get(str(x), str(x)[:6]))
+
+    if len(base) == 0:
+        st.info("No leads available.")
+        st.stop()
+
     sel = st.selectbox("Select property", base["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
     pid = str(rev.get(sel))
@@ -1320,7 +1164,7 @@ elif PAGE == "Screens":
         st.info("Create Inventory record first.")
         st.stop()
 
-    inv["display"] = inv["property_id"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
+    inv["display"] = inv["property_id"].astype("string").map(lambda x: disp_map.get(str(x), str(x)[:6]))
     sel = st.selectbox("Select site", inv["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
     pid = str(rev.get(sel))
@@ -1369,7 +1213,7 @@ elif PAGE == "Documents":
         st.info("Create Inventory record first.")
         st.stop()
 
-    inv["display"] = inv["property_id"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
+    inv["display"] = inv["property_id"].astype("string").map(lambda x: disp_map.get(str(x), str(x)[:6]))
     sel = st.selectbox("Select site", inv["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
     pid = str(rev.get(sel))
@@ -1412,7 +1256,7 @@ elif PAGE == "Proposals":
     signer = {"username": USER, "designation": signer_profile.get("designation", "")}
 
     base = leads_df.drop_duplicates("__hash").copy()
-    base["display"] = base["__hash"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
+    base["display"] = base["__hash"].astype("string").map(lambda x: disp_map.get(str(x), str(x)[:6]))
     sel = st.selectbox("Select property", base["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
     pid = str(rev.get(sel))
@@ -1466,8 +1310,18 @@ elif PAGE == "WhatsApp":
         height=90,
     )
 
-    df = leads_df.drop_duplicates("__hash").copy().head(300)
-    df["display"] = df["__hash"].astype("string").map(lambda x: disp_map.get(x, x[:6]))
+    df = leads_df.drop_duplicates("__hash").copy()
+    if len(df) == 0:
+        st.info("No leads available.")
+        st.stop()
+
+    # limit selectable list for UI speed, but keep search ability
+    q = st.text_input("Quick filter leads list (optional)", placeholder="Type property / city / promoter…")
+    if q.strip():
+        df = df[df["__search"].str.contains(re.escape(q.strip().lower()), na=False)]
+    df = df.head(500)
+
+    df["display"] = df["__hash"].astype("string").map(lambda x: disp_map.get(str(x), str(x)[:6]))
     sel = st.selectbox("Select lead", df["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
     pid = str(rev.get(sel))
@@ -1483,7 +1337,8 @@ elif PAGE == "WhatsApp":
         contact_person=contact,
     )
 
-    st.link_button("Open WhatsApp", whatsapp_url(phone, msg), use_container_width=True, disabled=(whatsapp_url(phone, msg) == "#"))
+    wa = whatsapp_url(phone, msg)
+    st.link_button("Open WhatsApp", wa, use_container_width=True, disabled=(wa == "#"))
 
     if st.button("Mark Sent ✅", type="primary"):
         exec_sql(
@@ -1509,7 +1364,6 @@ elif PAGE == "Admin Panel":
         st.stop()
 
     page_title("⚙ Admin Panel", "Create users, reset passwords, company settings, audit logs.")
-
     tabs = st.tabs(["Users", "Company Settings", "Audit Logs"])
 
     with tabs[0]:
@@ -1584,7 +1438,6 @@ elif PAGE == "Admin Panel":
             st.success("Uploaded.")
             st.rerun()
         st.write("Current:", prof.get("signature_filename", "(none)"))
-
     with tabs[2]:
         logs = qdf("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 500")
         st.dataframe(logs, use_container_width=True, height=560)
