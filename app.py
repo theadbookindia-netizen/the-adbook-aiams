@@ -1725,10 +1725,11 @@ elif PAGE_KEY == "Ad Sales Inventory":
     ad = qdf(sql, params)
 
     st.markdown(f"<span class='badge badge-strong'>Records: {len(ad):,}</span>", unsafe_allow_html=True)
+   ad = pd.DataFrame()
     t1,t2 = st.tabs(["📋 View", "➕ Add / Edit"])
     with t1:
         st.dataframe(ad, width='stretch', height=520)
-if len(ad) and can(SECTION, "export", ROLE):
+if (not ad.empty) and can(SECTION, "export", ROLE):
     st.download_button("⬇ Export bookings (CSV)", data=df_to_csv_bytes(ad), file_name="ad_inventory.csv", mime="text/csv")
 
     with t2:
