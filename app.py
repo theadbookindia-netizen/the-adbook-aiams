@@ -11,9 +11,14 @@ from io import BytesIO
 import numpy as np
 import pandas as pd
 import streamlit as st
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.pool import NullPool
+try:
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.exc import SQLAlchemyError
+    from sqlalchemy.pool import NullPool
+except ModuleNotFoundError as e:
+    st.error("Missing Python package: SQLAlchemy. Add `SQLAlchemy` to requirements.txt and redeploy.")
+    st.stop()
+
 
 # ---- PDF (Cloud-safe) ----
 from reportlab.lib.pagesizes import A4
