@@ -1846,7 +1846,8 @@ elif PAGE_KEY == "Leads Pipeline":
 
     sel = st.selectbox("Select lead", df["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
-    pid = str(rev.get(sel))
+    pid = rev.get(sel, "")
+    pid = str(pid) if pid else ""
     st.session_state["active_pid"] = pid
     row = df[df["__hash"].astype("string") == pid].iloc[0].to_dict()
 
@@ -1878,9 +1879,8 @@ elif PAGE_KEY == "Leads Pipeline":
         st.rerun()
     # --- Lead 360 (Interactions / Tasks / Status History) ---
     if not pid:
-        st.info("Select a lead/property in **Leads Pipeline** to view Interactions, Tasks, and Status History.")
-    else:
-        if table_exists("interactions") or table_exists("tasks") or table_exists("lead_status_history"):
+    st.info("Select a lead/property in **Leads Pipeline** to view Interactions, Tasks, and Status History.")
+    st.stop()
             st.markdown("---")
             t_int, t_tasks, t_hist = st.tabs(["📒 Interactions", "⏰ Tasks & Alerts", "🧾 Status History"])
     
