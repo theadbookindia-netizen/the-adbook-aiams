@@ -162,16 +162,19 @@ st.markdown(
 # =========================================================
 # DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL + PERF
 # =========================================================
-import os, socket
+import os
+import socket
 from urllib.parse import urlparse
+
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 from sqlalchemy.exc import SQLAlchemyError
 
+
 def get_database_url() -> str:
-    # Priority: Streamlit Secrets -> Env var
+    """Priority: Streamlit Secrets -> Environment variable."""
     try:
         if "DATABASE_URL" in st.secrets:
             return str(st.secrets["DATABASE_URL"]).strip()
@@ -179,20 +182,26 @@ def get_database_url() -> str:
         pass
     return os.environ.get("DATABASE_URL", "").strip()
 
+
 def _force_psycopg3(url: str) -> str:
+    """Normalize URL and force SQLAlchemy psycopg3 driver."""
     u = (url or "").strip()
     if u.startswith("postgres://"):
         u = u.replace("postgres://", "postgresql://", 1)
+
     # If no explicit driver, force psycopg3
     if u.startswith("postgresql://"):
         u = u.replace("postgresql://", "postgresql+psycopg://", 1)
-    # If psycopg2 was specified, switch to psycopg3
+
+    # If psycopg2 specified, switch to psycopg3
     if u.startswith("postgresql+psycopg2://"):
         u = u.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
+
     return u
 
+
 def _resolve_ipv4(host: str) -> str | None:
-    """Return an IPv4 for host if available (prevents IPv6 routing failures)."""
+    """Return an IPv4 address for host if available (prevents IPv6 routing failures)."""
     try:
         infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
         if infos:
@@ -200,6 +209,7 @@ def _resolve_ipv4(host: str) -> str | None:
     except Exception:
         return None
     return None
+
 
 @st.cache_resource(show_spinner=False)
 def db_engine():
@@ -214,28 +224,28 @@ def db_engine():
 
     # Force IPv4 (fixes: Cannot assign requested address on IPv6-only resolution)
     ipv4 = _resolve_ipv4(host)
+
+    # ✅ Critical: Disable prepared statements for Supabase Pooler / PgBouncer
     connect_args = {
         "connect_timeout": 10,
-        "prepare_threshold": 0,   # IMPORTANT for Supabase pooler / PgBouncer stability
+        "prepare_threshold": 0,
     }
     if ipv4:
-        connect_args["hostaddr"] = ipv4  # psycopg/libpq will use this instead of IPv6
+        # psycopg/libpq will prefer this instead of IPv6
+        connect_args["hostaddr"] = ipv4
 
     try:
- create_engine(
-    url,
-    pool_pre_ping=True,
-    poolclass=NullPool,
+        eng = create_engine(
+            url,
+            pool_pre_ping=True,
+            poolclass=NullPool,  # safest with Supabase Pooler/PgBouncer
+            connect_args=connect_args,
+        )
 
-    # 🚨 Critical fix for Supabase + PgBouncer + psycopg3
-    connect_args={
-        "prepare_threshold": 0,   # disables prepared statements
-        "connect_timeout": 10
-    },
-    )
-        # smoke test
+        # smoke test (fast fail)
         with eng.connect() as conn:
             conn.execute(text("SELECT 1"))
+
         return eng
 
     except Exception as e:
@@ -244,11 +254,12 @@ def db_engine():
             "Checklist:\n"
             "• Pooler URL must be port 6543 and username postgres.<project_ref>\n"
             "• Direct DB URL must be db.<project_ref>.supabase.co:5432 and username postgres\n"
-            "• Use psycopg3 (requirements: psycopg[binary] + SQLAlchemy)\n"
+            "• requirements.txt must include: SQLAlchemy and psycopg[binary]\n"
             "• If your runtime blocks outbound ports, DB connect will fail even with correct URL."
         )
         st.exception(e)
         st.stop()
+
 
 def exec_sql(sql: str, params: dict | None = None) -> None:
     try:
@@ -259,6 +270,7 @@ def exec_sql(sql: str, params: dict | None = None) -> None:
         st.code(str(e))
         st.stop()
 
+
 def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
     try:
         with db_engine().connect() as conn:
@@ -268,16 +280,18 @@ def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
         st.code(str(e))
         st.stop()
 
+
 @st.cache_data(show_spinner=False, ttl=300)
 def table_exists(table_name: str) -> bool:
     df = qdf(
         """SELECT EXISTS(
                SELECT 1 FROM information_schema.tables
                WHERE table_schema='public' AND table_name=:t
-        ) AS ex""",
+           ) AS ex""",
         {"t": table_name},
     )
     return bool(df.iloc[0]["ex"])
+
 
 @st.cache_data(show_spinner=False, ttl=300)
 def column_exists(table_name: str, column_name: str) -> bool:
@@ -285,10 +299,11 @@ def column_exists(table_name: str, column_name: str) -> bool:
         """SELECT EXISTS(
                SELECT 1 FROM information_schema.columns
                WHERE table_schema='public' AND table_name=:t AND column_name=:c
-        ) AS ex""",
+           ) AS ex""",
         {"t": table_name, "c": column_name},
     )
     return bool(df.iloc[0]["ex"])
+
 
 # =========================================================
 # MIGRATIONS + SEED (RUN ONCE PER SERVER)
