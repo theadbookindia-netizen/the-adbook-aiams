@@ -162,19 +162,16 @@ st.markdown(
 # =========================================================
 # DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL + PERF
 # =========================================================
-import os
-import socket
+import os, socket
 from urllib.parse import urlparse
-
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 from sqlalchemy.exc import SQLAlchemyError
 
-
 def get_database_url() -> str:
-    """Priority: Streamlit Secrets -> Environment variable."""
+    # Priority: Streamlit Secrets -> Env var
     try:
         if "DATABASE_URL" in st.secrets:
             return str(st.secrets["DATABASE_URL"]).strip()
@@ -182,26 +179,20 @@ def get_database_url() -> str:
         pass
     return os.environ.get("DATABASE_URL", "").strip()
 
-
 def _force_psycopg3(url: str) -> str:
-    """Normalize URL and force SQLAlchemy psycopg3 driver."""
     u = (url or "").strip()
     if u.startswith("postgres://"):
         u = u.replace("postgres://", "postgresql://", 1)
-
     # If no explicit driver, force psycopg3
     if u.startswith("postgresql://"):
         u = u.replace("postgresql://", "postgresql+psycopg://", 1)
-
-    # If psycopg2 specified, switch to psycopg3
+    # If psycopg2 was specified, switch to psycopg3
     if u.startswith("postgresql+psycopg2://"):
         u = u.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
-
     return u
 
-
 def _resolve_ipv4(host: str) -> str | None:
-    """Return an IPv4 address for host if available (prevents IPv6 routing failures)."""
+    """Return an IPv4 for host if available (prevents IPv6 routing failures)."""
     try:
         infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
         if infos:
@@ -209,7 +200,6 @@ def _resolve_ipv4(host: str) -> str | None:
     except Exception:
         return None
     return None
-
 
 @st.cache_resource(show_spinner=False)
 def db_engine():
@@ -224,28 +214,24 @@ def db_engine():
 
     # Force IPv4 (fixes: Cannot assign requested address on IPv6-only resolution)
     ipv4 = _resolve_ipv4(host)
-
-    # ✅ Critical: Disable prepared statements for Supabase Pooler / PgBouncer
     connect_args = {
         "connect_timeout": 10,
-        "prepare_threshold": 0,
+        "prepare_threshold": 0,   # IMPORTANT for Supabase pooler / PgBouncer stability
+        "statement_cache_size": 0,  # avoid prepared stmt caching with PgBouncer
     }
     if ipv4:
-        # psycopg/libpq will prefer this instead of IPv6
-        connect_args["hostaddr"] = ipv4
+        connect_args["hostaddr"] = ipv4  # psycopg/libpq will use this instead of IPv6
 
     try:
         eng = create_engine(
             url,
             pool_pre_ping=True,
-            poolclass=NullPool,  # safest with Supabase Pooler/PgBouncer
+            poolclass=NullPool,     # safest for serverless + pooler
             connect_args=connect_args,
         )
-
-        # smoke test (fast fail)
+        # smoke test
         with eng.connect() as conn:
             conn.execute(text("SELECT 1"))
-
         return eng
 
     except Exception as e:
@@ -254,12 +240,11 @@ def db_engine():
             "Checklist:\n"
             "• Pooler URL must be port 6543 and username postgres.<project_ref>\n"
             "• Direct DB URL must be db.<project_ref>.supabase.co:5432 and username postgres\n"
-            "• requirements.txt must include: SQLAlchemy and psycopg[binary]\n"
+            "• Use psycopg3 (requirements: psycopg[binary] + SQLAlchemy)\n"
             "• If your runtime blocks outbound ports, DB connect will fail even with correct URL."
         )
         st.exception(e)
         st.stop()
-
 
 def exec_sql(sql: str, params: dict | None = None) -> None:
     try:
@@ -270,7 +255,6 @@ def exec_sql(sql: str, params: dict | None = None) -> None:
         st.code(str(e))
         st.stop()
 
-
 def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
     try:
         with db_engine().connect() as conn:
@@ -280,18 +264,16 @@ def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
         st.code(str(e))
         st.stop()
 
-
 @st.cache_data(show_spinner=False, ttl=300)
 def table_exists(table_name: str) -> bool:
     df = qdf(
         """SELECT EXISTS(
                SELECT 1 FROM information_schema.tables
                WHERE table_schema='public' AND table_name=:t
-           ) AS ex""",
+        ) AS ex""",
         {"t": table_name},
     )
     return bool(df.iloc[0]["ex"])
-
 
 @st.cache_data(show_spinner=False, ttl=300)
 def column_exists(table_name: str, column_name: str) -> bool:
@@ -299,17 +281,16 @@ def column_exists(table_name: str, column_name: str) -> bool:
         """SELECT EXISTS(
                SELECT 1 FROM information_schema.columns
                WHERE table_schema='public' AND table_name=:t AND column_name=:c
-           ) AS ex""",
+        ) AS ex""",
         {"t": table_name, "c": column_name},
     )
     return bool(df.iloc[0]["ex"])
 
-
 # =========================================================
 # MIGRATIONS + SEED (RUN ONCE PER SERVER)
 # =========================================================
-@st.cache_resource(ttl=3600)
-def db_engine():
+@st.cache_resource(show_spinner=False)
+def init_db_once():
     # tables
     exec_sql("""
     CREATE TABLE IF NOT EXISTS users(
@@ -693,72 +674,7 @@ def db_engine():
 
     return True
 
-@st.cache_resource(show_spinner=False)
-def init_db_once():
-    """
-    Safe DB bootstrap.
-    - Does NOT break existing tables.
-    - Creates only lightweight helper tables if missing.
-    - If you already ran your migration manually, this will do almost nothing.
-    """
-    # If DB is not reachable, fail early with your existing db_engine error handling
-    _ = db_engine()
 
-    # Minimal tables that the app expects in many pages
-    # (Create only if missing. Safe for existing data.)
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS audit_logs(
-        id TEXT PRIMARY KEY,
-        actor TEXT,
-        action TEXT,
-        details TEXT,
-        created_at TIMESTAMP DEFAULT NOW()
-    );
-    """)
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS tasks(
-        id TEXT PRIMARY KEY,
-        record_hash TEXT,
-        section TEXT,
-        title TEXT,
-        task_type TEXT,
-        priority TEXT,
-        status TEXT,
-        assigned_to TEXT,
-        due_date TEXT,
-        created_at TIMESTAMP DEFAULT NOW(),
-        created_by TEXT,
-        notes TEXT
-    );
-    """)
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS interactions(
-        id TEXT PRIMARY KEY,
-        record_hash TEXT,
-        section TEXT,
-        interaction_date TIMESTAMP DEFAULT NOW(),
-        mode TEXT,
-        remarks TEXT,
-        next_follow_up_date TEXT,
-        created_by TEXT,
-        attachment_url TEXT
-    );
-    """)
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS lead_status_history(
-        id TEXT PRIMARY KEY,
-        record_hash TEXT,
-        section TEXT,
-        changed_at TIMESTAMP DEFAULT NOW(),
-        status_from TEXT,
-        status_to TEXT,
-        changed_by TEXT,
-        note TEXT
-    );
-    """)
 
 init_db_once()
 
@@ -1971,84 +1887,128 @@ elif PAGE_KEY == "Leads Pipeline":
         # If tables are missing, show a friendly message (no crash)
         if not (table_exists("interactions") or table_exists("tasks") or table_exists("lead_status_history")):
             st.info("Lead 360 modules are not enabled yet. Run DB migration to create Interactions/Tasks/History tables.")
-# ================================
-# PAGE ROUTER (FIXED)
-# ================================
+        else:
+            t_int, t_tasks, t_hist = st.tabs(["📒 Interactions", "⏰ Tasks & Alerts", "🧾 Status History"])
 
-if PAGE_KEY == "Leads Pipeline":
+            with t_int:
+                if not table_exists("interactions"):
+                    st.info("Interactions table not found. Run the migration SQL to enable this module.")
+                else:
+                    ints = qdf(
+                        """SELECT interaction_date, mode, remarks, next_follow_up_date, created_by, attachment_url
+                           FROM interactions
+                          WHERE record_hash=:h AND section=:s
+                          ORDER BY interaction_date DESC
+                          LIMIT 300""",
+                        {"h": pid, "s": SECTION},
+                    )
+                    st.markdown(f"<span class='badge badge-strong'>Interactions: {len(ints):,}</span>", unsafe_allow_html=True)
+                    st.dataframe(ints, use_container_width=True, height=260)
 
-    # --- Lead 360 Tabs ---
-    if table_exists("interactions") or table_exists("tasks") or table_exists("lead_status_history"):
+                    can_add_int = can(SECTION, "edit", ROLE)
+                    with st.form("add_interaction"):
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            mode = st.selectbox("Mode", ["Call", "Email", "WhatsApp", "Visit"], index=0)
+                        with c2:
+                            next_fu = st.date_input("Next follow-up date (optional)", value=None)
+                        with c3:
+                            attach = st.text_input("Attachment URL (optional)")
+                        remarks = st.text_area("Remarks", height=90)
+                        ok = st.form_submit_button("➕ Add Interaction", type="primary", disabled=not can_add_int)
 
-        t_int, t_tasks, t_hist = st.tabs(
-            ["📒 Interactions", "⏰ Tasks & Alerts", "🧾 Status History"]
-        )
+                    if ok:
+                        exec_sql(
+                            """INSERT INTO interactions(id,record_hash,section,mode,remarks,next_follow_up_date,created_by,attachment_url)
+                                VALUES(:id,:h,:s,:m,:r,:n,:by,:a)""",
+                            {
+                                "id": str(uuid.uuid4()),
+                                "h": pid,
+                                "s": SECTION,
+                                "m": mode,
+                                "r": remarks,
+                                "n": (next_fu.isoformat() if next_fu else None),
+                                "by": USER,
+                                "a": attach,
+                            },
+                        )
+                        audit(USER, "ADD_INTERACTION", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} mode={mode}")
+                        st.success("Interaction added.")
+                        st.rerun()
 
-        with t_int:
-            st.markdown("### Interactions")
+            with t_tasks:
+                if not table_exists("tasks"):
+                    st.info("Tasks table not found. Run the migration SQL to enable this module.")
+                else:
+                    tasks = qdf(
+                        """SELECT title, task_type, priority, status, assigned_to, due_date, created_at, created_by, notes
+                           FROM tasks
+                          WHERE record_hash=:h AND (section=:s OR section IS NULL OR section='')
+                          ORDER BY CASE WHEN status='Done' THEN 1 ELSE 0 END,
+                                   due_date NULLS LAST, created_at DESC
+                          LIMIT 300""",
+                        {"h": pid, "s": SECTION},
+                    )
+                    st.markdown(f"<span class='badge badge-strong'>Tasks: {len(tasks):,}</span>", unsafe_allow_html=True)
+                    st.dataframe(tasks, use_container_width=True, height=260)
 
-        with t_tasks:
-            st.markdown("### Tasks")
+                    can_add_task = can(SECTION, "edit", ROLE)
+                    with st.form("add_task"):
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            title = st.text_input("Task title", placeholder="e.g., Site survey / Follow-up call / Permission letter")
+                            task_type = st.selectbox("Task type", ["Follow-up", "Survey", "Permission", "Installation", "Payment", "AdCampaign", "Other"], index=0)
+                        with c2:
+                            priority = st.selectbox("Priority", ["Low", "Medium", "High"], index=1)
+                            due = st.date_input("Due date", value=date.today() + timedelta(days=2))
+                        with c3:
+                            assignee = st.text_input("Assigned to", value=(row.get("assigned_to","") or USER))
+                            status_t = st.selectbox("Status", ["Open", "In Progress", "Done", "Cancelled"], index=0)
+                        notes_t = st.text_area("Notes", height=80)
+                        ok2 = st.form_submit_button("➕ Create Task", type="primary", disabled=not can_add_task)
 
-        with t_hist:
-            st.markdown("### Status History")
+                    if ok2:
+                        exec_sql(
+                            """INSERT INTO tasks(id,record_hash,section,title,task_type,priority,status,assigned_to,due_date,created_by,notes)
+                                VALUES(:id,:h,:s,:t,:tt,:p,:st,:a,:d,:by,:n)""",
+                            {
+                                "id": str(uuid.uuid4()),
+                                "h": pid,
+                                "s": SECTION,
+                                "t": title or "Task",
+                                "tt": task_type,
+                                "p": priority,
+                                "st": status_t,
+                                "a": assignee,
+                                "d": due.isoformat() if due else None,
+                                "by": USER,
+                                "n": notes_t,
+                            },
+                        )
+                        audit(USER, "ADD_TASK", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} title={title}")
+                        st.success("Task created.")
+                        st.rerun()
 
-    else:
-        st.info(
-            "Lead 360 modules are not enabled yet. Run DB migration first."
-        )
-
-
+            with t_hist:
+                if not table_exists("lead_status_history"):
+                    st.info("Status history table not found. Run the migration SQL to enable this module.")
+                else:
+                    hist = qdf(
+                        """SELECT changed_at, status_from, status_to, changed_by, note
+                           FROM lead_status_history
+                          WHERE record_hash=:h AND section=:s
+                          ORDER BY changed_at DESC
+                          LIMIT 300""",
+                        {"h": pid, "s": SECTION},
+                    )
+                    st.markdown(f"<span class='badge badge-strong'>Status changes: {len(hist):,}</span>", unsafe_allow_html=True)
+                    st.dataframe(hist, use_container_width=True, height=260)
 elif PAGE_KEY == "Inventory (Sites)":
-
-    page_title(
-        "🗂 Inventory (Sites)",
-        "Create / update installed sites. Fast search + CRUD."
-    )
+    page_title("🗂 Inventory (Sites)", "Create / update installed sites. Fast search + CRUD.")
 
     if not can(SECTION, "view", ROLE):
         st.error("You don't have permission to view this section.")
         st.stop()
-
-    q = st.text_input(
-        "Search (Code / Property / City / District / Contact)",
-        placeholder="Type to filter…"
-    )
-
-    params = {}
-    sql = "SELECT * FROM inventory_sites"
-
-    if q.strip():
-        sql += " WHERE " + ilike_clause(
-            [
-                "property_code",
-                "district",
-                "city",
-                "property_name",
-                "property_address",
-                "contact_person",
-                "contact_details",
-            ],
-            "q",
-        )
-        params["q"] = sql_q(q)
-
-    sql += " ORDER BY last_updated DESC LIMIT 2000"
-
-    inv = qdf(sql, params)
-
-    st.markdown(
-        f"<span class='badge badge-strong'>Sites: {len(inv):,}</span>",
-        unsafe_allow_html=True,
-    )
-
-    tabs = st.tabs(["📋 View", "➕ Add / Edit"])
-
-    with tabs[0]:
-        st.dataframe(inv, use_container_width=True, height=520)
-
-    with tabs[1]:
-        st.info("Edit/Add module here (existing logic remains)")
 
     # search (server-side for speed)
     q = st.text_input("Search (Code / Property / City / District / Contact)", placeholder="Type to filter…")
