@@ -1458,9 +1458,11 @@ PAGE_KEY = re.sub(r"^[^A-Za-z0-9]+\\s*", "", PAGE).strip()
 
 
 # Selected lead/property hash for Lead 360 panels (Interactions/Tasks/History)
-pid: str = ""
-pid = None  # global guard: lead record_hash selected in Leads Pipeline
+# Store selected lead/property ID safely
+if "active_pid" not in st.session_state:
+    st.session_state["active_pid"] = ""
 
+pid = st.session_state["active_pid"]
 
 
 
@@ -1845,6 +1847,7 @@ elif PAGE_KEY == "Leads Pipeline":
     sel = st.selectbox("Select lead", df["display"].tolist())
     rev = {v: k for k, v in disp_map.items()}
     pid = str(rev.get(sel))
+    st.session_state["active_pid"] = pid
     row = df[df["__hash"].astype("string") == pid].iloc[0].to_dict()
 
     st.markdown(f"**{pid_to_code.get(pid, pid[:6])} — {row.get('Property Name','')}**")
