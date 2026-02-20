@@ -11,14 +11,9 @@ from io import BytesIO
 import numpy as np
 import pandas as pd
 import streamlit as st
-try:
-    from sqlalchemy import create_engine, text
-    from sqlalchemy.exc import SQLAlchemyError
-    from sqlalchemy.pool import NullPool
-except ModuleNotFoundError as e:
-    st.error("Missing Python package: SQLAlchemy. Add `SQLAlchemy` to requirements.txt and redeploy.")
-    st.stop()
-
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import NullPool
 
 # ---- PDF (Cloud-safe) ----
 from reportlab.lib.pagesizes import A4
@@ -1395,7 +1390,7 @@ def save_proposal_pdf(section: str, property_id: str, pdf_bytes: bytes, created_
 # =========================================================
 with st.sidebar:
     if Path(LOGO_PATH).exists():
-        st.image(LOGO_PATH, use_container_width=True)
+        st.image(LOGO_PATH, width="stretch")
     st.markdown("### The Adbook AIAMS")
     st.caption("Outdoor Media Operations System")
     st.markdown("---")
@@ -1434,6 +1429,7 @@ PAGE = st.selectbox("Page", menu)
 
 # Normalize to internal page keys (strip emoji/prefix)
 PAGE_KEY = re.sub(r"^[^A-Za-z0-9]+\\s*", "", PAGE).strip()
+pid = None  # global guard: lead record_hash selected in Leads Pipeline
 
 
 
@@ -1546,7 +1542,7 @@ if PAGE_KEY == "Home":
                 continue
             any_hit = True
             with st.expander(f"{mod} — {len(df)} results", expanded=False):
-                st.dataframe(df, use_container_width=True, height=280)
+                st.dataframe(df, width="stretch", height=280)
                 if can(SECTION, "export", ROLE):
                     st.download_button(
                         f"⬇ Export {mod} (CSV)",
@@ -1577,7 +1573,7 @@ if PAGE_KEY == "Home":
     view_cols = ["District", "City", "Property Name", "Promoter / Developer Name",
                  "Promoter Mobile Number", "Promoter Email", "status", "assigned_to", "follow_up"]
     dfv = safe_df_cols(df, view_cols).iloc[start:end]
-    st.dataframe(dfv, use_container_width=True, height=560)
+    st.dataframe(dfv, width="stretch", height=560)
 
 elif PAGE_KEY == "Management Dashboard":
     page_title("📈 Management Dashboard", "Executive KPIs, coverage, funnel, and revenue snapshot.")
@@ -1616,7 +1612,7 @@ elif PAGE_KEY == "Management Dashboard":
         kpi("High-Value (flagged)", f"{hi:,}")
 
     st.markdown("### 🗺 District Coverage (Top 25 by properties)")
-    st.dataframe(dist, use_container_width=True, height=360)
+    st.dataframe(dist, width="stretch", height=360)
 
     st.markdown("### 📌 Funnel Snapshot")
     funnel = pd.DataFrame({
@@ -1630,7 +1626,7 @@ elif PAGE_KEY == "Management Dashboard":
             int((leads_df["status"]=="Rejected/Not Suitable").sum()),
         ]
     })
-    st.dataframe(funnel, use_container_width=True, height=260)
+    st.dataframe(funnel, width="stretch", height=260)
 
     st.markdown("### 💰 Revenue Snapshot (Agreements + Payments)")
     try:
@@ -1639,10 +1635,10 @@ elif PAGE_KEY == "Management Dashboard":
         c1, c2 = st.columns(2)
         with c1:
             st.caption("Agreements")
-            st.dataframe(agr, use_container_width=True, height=260)
+            st.dataframe(agr, width="stretch", height=260)
         with c2:
             st.caption("Billing & Reminders")
-            st.dataframe(pay, use_container_width=True, height=260)
+            st.dataframe(pay, width="stretch", height=260)
     except Exception as e:
         st.info("Revenue tables are available but some fields may be empty yet.")
 
@@ -1686,7 +1682,7 @@ elif PAGE_KEY == "Installation Opportunities":
     st.markdown(f"<span class='badge badge-strong'>Results: {len(df):,}</span>", unsafe_allow_html=True)
 
     view_cols = ["District","City","Property Name","Promoter / Developer Name","Promoter Mobile Number","Promoter Email","status","assigned_to","follow_up"]
-    st.dataframe(safe_df_cols(df, view_cols).head(800), use_container_width=True, height=560)
+    st.dataframe(safe_df_cols(df, view_cols).head(800), width="stretch", height=560)
 
 elif PAGE_KEY == "Ads Opportunities":
     page_title("💼 Ads Opportunities", "Find screens/sites to sell advertisements (availability + targeting).")
@@ -1709,7 +1705,7 @@ elif PAGE_KEY == "Ads Opportunities":
     sql = base + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY i.district, i.city LIMIT 2000"
     scr = qdf(sql, params)
     st.markdown(f"<span class='badge badge-strong'>Screens found: {len(scr):,}</span>", unsafe_allow_html=True)
-    st.dataframe(scr, use_container_width=True, height=520)
+    st.dataframe(scr, width="stretch", height=520)
 
     st.caption("Tip: Use Ad Sales Inventory page to create bookings and track clients/slots.")
 
@@ -1738,7 +1734,7 @@ elif PAGE_KEY == "Tasks & Alerts":
     tdf = qdf(sql, params)
 
     st.markdown(f"<span class='badge badge-strong'>Tasks: {len(tdf):,}</span>", unsafe_allow_html=True)
-    st.dataframe(tdf, use_container_width=True, height=520)
+    st.dataframe(tdf, width="stretch", height=520)
 
     st.markdown("### ➕ Quick Task Create")
     can_add_task = can(SECTION, "edit", ROLE)
@@ -1771,7 +1767,7 @@ elif PAGE_KEY == "Reports":
     # Performance by assignee
     perf = leads_df.groupby(["assigned_to","status"]).size().reset_index(name="count")
     st.markdown("### 👥 Executive Performance (Lead Status Counts)")
-    st.dataframe(perf.sort_values(["assigned_to","count"], ascending=[True,False]), use_container_width=True, height=420)
+    st.dataframe(perf.sort_values(["assigned_to","count"], ascending=[True,False]), width="stretch", height=420)
 
     st.markdown("### 🗺 White-spot Districts (no Installed)")
     dist_status = leads_df.groupby(["District","status"]).size().reset_index(name="count")
@@ -1779,7 +1775,7 @@ elif PAGE_KEY == "Reports":
     totals = leads_df.groupby("District").size().reset_index(name="total")
     cov = totals.merge(installed_by_dist, on="District", how="left").fillna({"installed":0})
     white = cov[cov["installed"]==0].sort_values("total", ascending=False).head(50)
-    st.dataframe(white, use_container_width=True, height=360)
+    st.dataframe(white, width="stretch", height=360)
 
     st.markdown("### ⏱ Average Conversion Time (Contacted → Installed)")
     if table_exists("lead_status_history"):
@@ -1798,7 +1794,7 @@ elif PAGE_KEY == "Reports":
             if len(merged):
                 merged["days"] = (pd.to_datetime(merged["installed_at"]) - pd.to_datetime(merged["contacted_at"])).dt.days
                 st.write(f"Average days: **{merged['days'].mean():.1f}** (based on {len(merged)} conversions)")
-                st.dataframe(merged[["record_hash","contacted_at","installed_at","days"]].sort_values("days").head(100), use_container_width=True, height=320)
+                st.dataframe(merged[["record_hash","contacted_at","installed_at","days"]].sort_values("days").head(100), width="stretch", height=320)
             else:
                 st.info("No conversions found in status history yet.")
         except Exception:
@@ -1847,127 +1843,130 @@ elif PAGE_KEY == "Leads Pipeline":
         audit(USER, "LEAD_UPDATE", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} status={status}")
         st.success("Saved.")
         st.rerun()
-    # --- Lead 360 (Interactions / Tasks / Status History) ---
+# --- Lead 360 (Interactions / Tasks / Status History) ---
+if not pid:
+    st.info("Select a lead/property in **Leads Pipeline** to view Interactions, Tasks, and Status History.")
+else:
     if table_exists("interactions") or table_exists("tasks") or table_exists("lead_status_history"):
-    st.markdown("---")
-    t_int, t_tasks, t_hist = st.tabs(["📒 Interactions", "⏰ Tasks & Alerts", "🧾 Status History"])
-
-    with t_int:
-        if not table_exists("interactions"):
-            st.info("Interactions table not found. Run the migration SQL to enable this module.")
-        else:
-            ints = qdf(
-                """SELECT interaction_date, mode, remarks, next_follow_up_date, created_by, attachment_url
-                   FROM interactions
-                  WHERE record_hash=:h AND section=:s
-                  ORDER BY interaction_date DESC
-                  LIMIT 300""",
-                {"h": pid, "s": SECTION},
-            )
-            st.markdown(f"<span class='badge badge-strong'>Interactions: {len(ints):,}</span>", unsafe_allow_html=True)
-            st.dataframe(ints, use_container_width=True, height=260)
-
-            can_add_int = can(SECTION, "edit", ROLE)
-            with st.form("add_interaction"):
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    mode = st.selectbox("Mode", ["Call", "Email", "WhatsApp", "Visit"], index=0)
-                with c2:
-                    next_fu = st.date_input("Next follow-up date (optional)", value=None)
-                with c3:
-                    attach = st.text_input("Attachment URL (optional)")
-                remarks = st.text_area("Remarks", height=90)
-                ok = st.form_submit_button("➕ Add Interaction", type="primary", disabled=not can_add_int)
-            if ok:
-                exec_sql(
-                    """INSERT INTO interactions(id,record_hash,section,mode,remarks,next_follow_up_date,created_by,attachment_url)
-                        VALUES(:id,:h,:s,:m,:r,:n,:by,:a)""",
-                    {
-                        "id": str(uuid.uuid4()),
-                        "h": pid,
-                        "s": SECTION,
-                        "m": mode,
-                        "r": remarks,
-                        "n": (next_fu.isoformat() if next_fu else ""),
-                        "by": USER,
-                        "a": attach,
-                    },
+        st.markdown("---")
+        t_int, t_tasks, t_hist = st.tabs(["📒 Interactions", "⏰ Tasks & Alerts", "🧾 Status History"])
+    
+        with t_int:
+            if not table_exists("interactions"):
+                st.info("Interactions table not found. Run the migration SQL to enable this module.")
+            else:
+                ints = qdf(
+                    """SELECT interaction_date, mode, remarks, next_follow_up_date, created_by, attachment_url
+                       FROM interactions
+                      WHERE record_hash=:h AND section=:s
+                      ORDER BY interaction_date DESC
+                      LIMIT 300""",
+                    {"h": pid, "s": SECTION},
                 )
-                audit(USER, "ADD_INTERACTION", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} mode={mode}")
-                st.success("Interaction added.")
-                st.rerun()
-
-    with t_tasks:
-        if not table_exists("tasks"):
-            st.info("Tasks table not found. Run the migration SQL to enable this module.")
-        else:
-            # list tasks for this lead
-            tasks = qdf(
-                """SELECT title, task_type, priority, status, assigned_to, due_date, created_at, created_by, notes
-                   FROM tasks
-                  WHERE record_hash=:h AND (section=:s OR section IS NULL OR section='')
-                  ORDER BY CASE WHEN status='Done' THEN 1 ELSE 0 END, due_date NULLS LAST, created_at DESC
-                  LIMIT 300""",
-                {"h": pid, "s": SECTION},
-            )
-            st.markdown(f"<span class='badge badge-strong'>Tasks: {len(tasks):,}</span>", unsafe_allow_html=True)
-            st.dataframe(tasks, use_container_width=True, height=260)
-
-            can_add_task = can(SECTION, "edit", ROLE)
-            with st.form("add_task"):
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    title = st.text_input("Task title", placeholder="e.g., Site survey / Follow-up call / Permission letter")
-                    task_type = st.selectbox("Task type", ["Follow-up", "Survey", "Permission", "Installation", "Payment", "AdCampaign", "Other"], index=0)
-                with c2:
-                    priority = st.selectbox("Priority", ["Low", "Medium", "High"], index=1)
-                    due = st.date_input("Due date", value=date.today() + timedelta(days=2))
-                with c3:
-                    assignee = st.text_input("Assigned to", value=(row.get("assigned_to","") or USER))
-                    status_t = st.selectbox("Status", ["Open", "In Progress", "Done", "Cancelled"], index=0)
-                notes_t = st.text_area("Notes", height=80)
-                ok2 = st.form_submit_button("➕ Create Task", type="primary", disabled=not can_add_task)
-            if ok2:
-                exec_sql(
-                    """INSERT INTO tasks(id,record_hash,section,title,task_type,priority,status,assigned_to,due_date,created_by,notes)
-                        VALUES(:id,:h,:s,:t,:tt,:p,:st,:a,:d,:by,:n)""",
-                    {
-                        "id": str(uuid.uuid4()),
-                        "h": pid,
-                        "s": SECTION,
-                        "t": title or "Task",
-                        "tt": task_type,
-                        "p": priority,
-                        "st": status_t,
-                        "a": assignee,
-                        "d": due.isoformat() if due else "",
-                        "by": USER,
-                        "n": notes_t,
-                    },
+                st.markdown(f"<span class='badge badge-strong'>Interactions: {len(ints):,}</span>", unsafe_allow_html=True)
+                st.dataframe(ints, width="stretch", height=260)
+    
+                can_add_int = can(SECTION, "edit", ROLE)
+                with st.form("add_interaction"):
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        mode = st.selectbox("Mode", ["Call", "Email", "WhatsApp", "Visit"], index=0)
+                    with c2:
+                        next_fu = st.date_input("Next follow-up date (optional)", value=None)
+                    with c3:
+                        attach = st.text_input("Attachment URL (optional)")
+                    remarks = st.text_area("Remarks", height=90)
+                    ok = st.form_submit_button("➕ Add Interaction", type="primary", disabled=not can_add_int)
+                if ok:
+                    exec_sql(
+                        """INSERT INTO interactions(id,record_hash,section,mode,remarks,next_follow_up_date,created_by,attachment_url)
+                            VALUES(:id,:h,:s,:m,:r,:n,:by,:a)""",
+                        {
+                            "id": str(uuid.uuid4()),
+                            "h": pid,
+                            "s": SECTION,
+                            "m": mode,
+                            "r": remarks,
+                            "n": (next_fu.isoformat() if next_fu else ""),
+                            "by": USER,
+                            "a": attach,
+                        },
+                    )
+                    audit(USER, "ADD_INTERACTION", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} mode={mode}")
+                    st.success("Interaction added.")
+                    st.rerun()
+    
+        with t_tasks:
+            if not table_exists("tasks"):
+                st.info("Tasks table not found. Run the migration SQL to enable this module.")
+            else:
+                # list tasks for this lead
+                tasks = qdf(
+                    """SELECT title, task_type, priority, status, assigned_to, due_date, created_at, created_by, notes
+                       FROM tasks
+                      WHERE record_hash=:h AND (section=:s OR section IS NULL OR section='')
+                      ORDER BY CASE WHEN status='Done' THEN 1 ELSE 0 END, due_date NULLS LAST, created_at DESC
+                      LIMIT 300""",
+                    {"h": pid, "s": SECTION},
                 )
-                audit(USER, "ADD_TASK", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} title={title}")
-                st.success("Task created.")
-                st.rerun()
-
-    with t_hist:
-        if not table_exists("lead_status_history"):
-            st.info("Status history table not found. Run the migration SQL to enable this module.")
-        else:
-            hist = qdf(
-                """SELECT changed_at, status_from, status_to, changed_by, note
-                   FROM lead_status_history
-                  WHERE record_hash=:h AND section=:s
-                  ORDER BY changed_at DESC
-                  LIMIT 300""",
-                {"h": pid, "s": SECTION},
-            )
-            st.markdown(f"<span class='badge badge-strong'>Status changes: {len(hist):,}</span>", unsafe_allow_html=True)
-            st.dataframe(hist, use_container_width=True, height=260)
-
-
-
-
-
+                st.markdown(f"<span class='badge badge-strong'>Tasks: {len(tasks):,}</span>", unsafe_allow_html=True)
+                st.dataframe(tasks, width="stretch", height=260)
+    
+                can_add_task = can(SECTION, "edit", ROLE)
+                with st.form("add_task"):
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        title = st.text_input("Task title", placeholder="e.g., Site survey / Follow-up call / Permission letter")
+                        task_type = st.selectbox("Task type", ["Follow-up", "Survey", "Permission", "Installation", "Payment", "AdCampaign", "Other"], index=0)
+                    with c2:
+                        priority = st.selectbox("Priority", ["Low", "Medium", "High"], index=1)
+                        due = st.date_input("Due date", value=date.today() + timedelta(days=2))
+                    with c3:
+                        assignee = st.text_input("Assigned to", value=(row.get("assigned_to","") or USER))
+                        status_t = st.selectbox("Status", ["Open", "In Progress", "Done", "Cancelled"], index=0)
+                    notes_t = st.text_area("Notes", height=80)
+                    ok2 = st.form_submit_button("➕ Create Task", type="primary", disabled=not can_add_task)
+                if ok2:
+                    exec_sql(
+                        """INSERT INTO tasks(id,record_hash,section,title,task_type,priority,status,assigned_to,due_date,created_by,notes)
+                            VALUES(:id,:h,:s,:t,:tt,:p,:st,:a,:d,:by,:n)""",
+                        {
+                            "id": str(uuid.uuid4()),
+                            "h": pid,
+                            "s": SECTION,
+                            "t": title or "Task",
+                            "tt": task_type,
+                            "p": priority,
+                            "st": status_t,
+                            "a": assignee,
+                            "d": due.isoformat() if due else "",
+                            "by": USER,
+                            "n": notes_t,
+                        },
+                    )
+                    audit(USER, "ADD_TASK", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} title={title}")
+                    st.success("Task created.")
+                    st.rerun()
+    
+        with t_hist:
+            if not table_exists("lead_status_history"):
+                st.info("Status history table not found. Run the migration SQL to enable this module.")
+            else:
+                hist = qdf(
+                    """SELECT changed_at, status_from, status_to, changed_by, note
+                       FROM lead_status_history
+                      WHERE record_hash=:h AND section=:s
+                      ORDER BY changed_at DESC
+                      LIMIT 300""",
+                    {"h": pid, "s": SECTION},
+                )
+                st.markdown(f"<span class='badge badge-strong'>Status changes: {len(hist):,}</span>", unsafe_allow_html=True)
+                st.dataframe(hist, width="stretch", height=260)
+    
+    
+    
+    
+    
 elif PAGE_KEY == "Inventory (Sites)":
     page_title("🗂 Inventory (Sites)", "Create / update installed sites. Fast search + CRUD.")
 
@@ -1988,7 +1987,7 @@ elif PAGE_KEY == "Inventory (Sites)":
 
     tabs = st.tabs(["📋 View", "➕ Add / Edit", "🔁 Recount Screens"])
     with tabs[0]:
-        st.dataframe(inv, use_container_width=True, height=520)
+        st.dataframe(inv, width="stretch", height=520)
         if len(inv) and can(SECTION, "export", ROLE):
             st.download_button("⬇ Export sites (CSV)", data=df_to_csv_bytes(inv), file_name="inventory_sites.csv", mime="text/csv")
 
@@ -2133,7 +2132,7 @@ elif PAGE_KEY == "Screens":
     t1, t2 = st.tabs(["📋 View", "➕ Add / Edit"])
 
     with t1:
-        st.dataframe(scr, use_container_width=True, height=520)
+        st.dataframe(scr, width="stretch", height=520)
         if (len(scr) > 0) and can(SECTION, "export", ROLE):
             st.download_button(
                 "⬇ Export screens (CSV)",
@@ -2220,7 +2219,7 @@ elif PAGE_KEY == "Service Center":
     )
 
     st.markdown(f"<span class='badge badge-strong'>Due: {len(due):,}</span>", unsafe_allow_html=True)
-    st.dataframe(due, use_container_width=True, height=420)
+    st.dataframe(due, width="stretch", height=420)
 
     st.markdown("### ✅ Mark serviced")
     if len(due):
@@ -2268,7 +2267,7 @@ elif PAGE_KEY == "Ad Sales Inventory":
     t1, t2 = st.tabs(["📋 View", "➕ Add / Edit"])
 
     with t1:
-        st.dataframe(ad, use_container_width=True, height=520)
+        st.dataframe(ad, width="stretch", height=520)
         if (not ad.empty) and can(SECTION, "export", ROLE):
             st.download_button(
                 "⬇ Export bookings (CSV)",
@@ -2365,7 +2364,7 @@ elif PAGE_KEY == "Agreements":
     st.markdown(f"<span class='badge badge-strong'>Agreements: {len(ag):,}</span>", unsafe_allow_html=True)
     t1,t2 = st.tabs(["📋 View", "➕ Add / Edit"])
     with t1:
-        st.dataframe(ag, use_container_width=True, height=520)
+        st.dataframe(ag, width="stretch", height=520)
 if len(ag) and can(SECTION, "export", ROLE):
     st.download_button("⬇ Export agreements (CSV)", data=df_to_csv_bytes(ag), file_name="agreements.csv", mime="text/csv")
 
@@ -2467,7 +2466,7 @@ elif PAGE_KEY == "Billing & Reminders":
 
     t1, t2 = st.tabs(["📋 Due / Payments", "➕ Add / Update Payment"])
     with t1:
-        st.dataframe(pay, use_container_width=True, height=520)
+        st.dataframe(pay, width="stretch", height=520)
         if len(pay) and can(SECTION, "export", ROLE):
             st.download_button("⬇ Export payments (CSV)", data=df_to_csv_bytes(pay), file_name="payments.csv", mime="text/csv")
 
@@ -2532,7 +2531,7 @@ elif PAGE_KEY == "Documents Vault":
 
     t1,t2 = st.tabs(["📋 View", "⬆ Upload"])
     with t1:
-        st.dataframe(docs, use_container_width=True, height=420)
+        st.dataframe(docs, width="stretch", height=420)
         if len(docs) and can(SECTION, "export", ROLE):
             st.download_button("⬇ Export documents (CSV)", data=df_to_csv_bytes(docs), file_name="documents_vault.csv", mime="text/csv")
         if len(docs):
