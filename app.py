@@ -2011,10 +2011,10 @@ if table_exists("interactions") or table_exists("tasks") or table_exists("lead_s
 else:
     st.info("Lead 360 modules are not enabled yet. Run DB migration to create Interactions/Tasks/History tables.")
     
-    
-    
 elif PAGE_KEY == "Inventory (Sites)":
     page_title("🗂 Inventory (Sites)", "Create / update installed sites. Fast search + CRUD.")
+
+
 
     if not can(SECTION, "view", ROLE):
         st.error("You don't have permission to view this section.")
