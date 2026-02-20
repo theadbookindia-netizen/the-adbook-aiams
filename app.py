@@ -1847,8 +1847,8 @@ elif PAGE_KEY == "Leads Pipeline":
         audit(USER, "LEAD_UPDATE", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} status={status}")
         st.success("Saved.")
         st.rerun()
-# --- Lead 360 (Interactions / Tasks / Status History) ---
-if table_exists("interactions") or table_exists("tasks") or table_exists("lead_status_history"):
+    # --- Lead 360 (Interactions / Tasks / Status History) ---
+    if table_exists("interactions") or table_exists("tasks") or table_exists("lead_status_history"):
     st.markdown("---")
     t_int, t_tasks, t_hist = st.tabs(["📒 Interactions", "⏰ Tasks & Alerts", "🧾 Status History"])
 
