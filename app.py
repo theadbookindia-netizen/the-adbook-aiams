@@ -208,6 +208,28 @@ def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
         st.code(str(e))
         st.stop()
 
+@st.cache_data(show_spinner=False, ttl=300)
+def table_exists(table_name: str) -> bool:
+    df = qdf(
+        """SELECT EXISTS(
+               SELECT 1 FROM information_schema.tables
+               WHERE table_schema='public' AND table_name=:t
+             ) AS ex""",
+        {"t": table_name},
+    )
+    return bool(df.iloc[0]["ex"])
+
+@st.cache_data(show_spinner=False, ttl=300)
+def column_exists(table_name: str, column_name: str) -> bool:
+    df = qdf(
+        """SELECT EXISTS(
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema='public' AND table_name=:t AND column_name=:c
+             ) AS ex""",
+        {"t": table_name, "c": column_name},
+    )
+    return bool(df.iloc[0]["ex"])
+
 
 # =========================================================
 # MIGRATIONS + SEED (RUN ONCE PER SERVER)
@@ -298,6 +320,108 @@ def init_db_once():
       last_updated TIMESTAMP DEFAULT NOW()
     )""")
 
+    
+    # ---- AIAMS Management Upgrade (safe additions) ----
+    # Add optional management fields to inventory_sites (won't break existing rows)
+    exec_sql("""
+    ALTER TABLE IF EXISTS inventory_sites
+      ADD COLUMN IF NOT EXISTS property_type TEXT,
+      ADD COLUMN IF NOT EXISTS property_status TEXT,
+      ADD COLUMN IF NOT EXISTS construction_end_date DATE,
+      ADD COLUMN IF NOT EXISTS cost_inr DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS high_value_flag INTEGER DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS footfall_estimate INTEGER,
+      ADD COLUMN IF NOT EXISTS visibility_score INTEGER,
+      ADD COLUMN IF NOT EXISTS expected_ad_revenue DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS roi_band TEXT
+    """)
+
+    # Interaction timeline for leads (calls/emails/visits)
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS interactions(
+      id TEXT PRIMARY KEY,
+      record_hash TEXT NOT NULL,
+      section TEXT NOT NULL,
+      interaction_date TIMESTAMP DEFAULT NOW(),
+      mode TEXT NOT NULL,
+      remarks TEXT,
+      next_follow_up_date TEXT,
+      created_by TEXT,
+      attachment_url TEXT
+    )""")
+
+    exec_sql("""CREATE INDEX IF NOT EXISTS idx_interactions_record ON interactions(record_hash, section, interaction_date DESC)""")
+
+    # Status history (for funnel, conversion time, audit)
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS lead_status_history(
+      id TEXT PRIMARY KEY,
+      record_hash TEXT NOT NULL,
+      section TEXT NOT NULL,
+      status_from TEXT,
+      status_to TEXT NOT NULL,
+      changed_at TIMESTAMP DEFAULT NOW(),
+      changed_by TEXT,
+      note TEXT
+    )""")
+
+    exec_sql("""CREATE INDEX IF NOT EXISTS idx_lsh_record ON lead_status_history(record_hash, section, changed_at DESC)""")
+
+    # Tasks / reminders
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS tasks(
+      id TEXT PRIMARY KEY,
+      record_hash TEXT,
+      section TEXT,
+      title TEXT NOT NULL,
+      task_type TEXT,
+      priority TEXT DEFAULT 'Medium',
+      status TEXT DEFAULT 'Open',
+      assigned_to TEXT,
+      due_date TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      created_by TEXT,
+      notes TEXT
+    )""")
+
+    exec_sql("""CREATE INDEX IF NOT EXISTS idx_tasks_assignee_due ON tasks(assigned_to, due_date, status)""")
+
+    # Ads CRM (optional)
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS clients(
+      id TEXT PRIMARY KEY,
+      client_name TEXT NOT NULL,
+      industry TEXT,
+      gst_number TEXT,
+      billing_address TEXT,
+      poc_name TEXT,
+      poc_phone TEXT,
+      poc_email TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )""")
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS campaigns(
+      id TEXT PRIMARY KEY,
+      client_id TEXT,
+      campaign_name TEXT NOT NULL,
+      start_date TEXT,
+      end_date TEXT,
+      status TEXT DEFAULT 'Proposed',
+      total_value DOUBLE PRECISION,
+      created_at TIMESTAMP DEFAULT NOW()
+    )""")
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS rate_cards(
+      id TEXT PRIMARY KEY,
+      district TEXT,
+      screen_type TEXT,
+      slot_seconds INTEGER,
+      rate_per_week DOUBLE PRECISION,
+      rate_per_month DOUBLE PRECISION,
+      effective_from TEXT
+    )""")
     exec_sql("""
     CREATE TABLE IF NOT EXISTS screens(
       screen_id TEXT PRIMARY KEY,
@@ -688,9 +812,9 @@ def global_search(term: str) -> dict[str, pd.DataFrame]:
         {"q": q},
     )
     out["Ad Sales Inventory"] = qdf(
-        f"""SELECT booking_id, property_id, client_name, screen_id, start_date, end_date, rate_pm, status, updated_at
+        f"""SELECT ad_id, property_id, client_name, screen_id, start_date, end_date, rate, status, updated_at
                FROM ad_inventory
-              WHERE {ilike_clause(['booking_id','property_id','client_name','screen_id','status','notes'], 'q')}
+              WHERE {ilike_clause(['ad_id','property_id','client_name','screen_id','status','notes'], 'q')}
               ORDER BY updated_at DESC
               LIMIT 200""",
         {"q": q},
@@ -1026,7 +1150,16 @@ def list_lead_updates(section: str) -> pd.DataFrame:
     return qdf("SELECT * FROM lead_updates WHERE section=:s", {"s": section})
 
 
-def upsert_lead_update(section, record_hash, status, assigned_to, lead_source, notes, follow_up, last_call_outcome=None):
+def upsert_lead_update(section, record_hash, status, assigned_to, lead_source, notes, follow_up, last_call_outcome=None, username: str | None = None):
+    """Upsert lead update and also write status history + audit log safely."""
+    username = username or "system"
+    # Fetch old values for audit + status history
+    old = qdf(
+        "SELECT status, assigned_to, notes, follow_up FROM lead_updates WHERE record_hash=:h AND section=:s",
+        {"h": record_hash, "s": section},
+    )
+    old_status = old.iloc[0]["status"] if len(old) else None
+
     exec_sql(
         """
         INSERT INTO lead_updates(record_hash,section,status,assigned_to,lead_source,notes,follow_up,last_call_outcome,last_call_at,last_updated)
@@ -1043,6 +1176,32 @@ def upsert_lead_update(section, record_hash, status, assigned_to, lead_source, n
         """,
         {"h": record_hash, "s": section, "st": status, "as": assigned_to, "src": lead_source, "n": notes, "fu": follow_up, "out": last_call_outcome},
     )
+
+    # Status history
+    try:
+        if old_status != status and table_exists("lead_status_history"):
+            exec_sql(
+                """INSERT INTO lead_status_history(id,record_hash,section,status_from,status_to,changed_by,note)
+                    VALUES(:id,:h,:s,:f,:t,:by,:note)""",
+                {
+                    "id": str(uuid.uuid4()),
+                    "h": record_hash,
+                    "s": section,
+                    "f": old_status,
+                    "t": status,
+                    "by": username,
+                    "note": "",
+                },
+            )
+    except Exception:
+        pass
+
+    # Audit trail (old/new snapshot)
+    try:
+        audit(username, "LEAD_UPSERT", f"section={section} record={record_hash} status:{old_status}->{status} assigned_to={assigned_to}")
+    except Exception:
+        pass
+
     list_lead_updates.clear()
 
 
@@ -1227,8 +1386,8 @@ with st.sidebar:
     allowed_sections = [SECTION_INSTALL, SECTION_ADS] if SCOPE == SCOPE_BOTH else [SCOPE]
     SECTION = st.radio("Module", allowed_sections, horizontal=True)
 
-    MENU_INSTALL = ["🏠 Home", "🧩 Leads Pipeline", "🗂 Inventory (Sites)", "🖥 Screens", "🛠 Service Center", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "📄 Documents Vault", "🗺 Map View", "📃 Proposals", "💬 WhatsApp", "📊 Reports"]
-    MENU_ADS = ["🏠 Home", "🧩 Leads Pipeline", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "💬 WhatsApp", "📊 Reports"]
+    MENU_INSTALL = ["🏠 Home", "📈 Management Dashboard", "🎯 Installation Opportunities", "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "🗂 Inventory (Sites)", "🖥 Screens", "🛠 Service Center", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "📄 Documents Vault", "🗺 Map View", "📃 Proposals", "💬 WhatsApp", "📊 Reports"]
+    MENU_ADS = ["🏠 Home", "📈 Management Dashboard", "💼 Ads Opportunities", "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "💬 WhatsApp", "📊 Reports"]
     menu = MENU_INSTALL if SECTION == SECTION_INSTALL else MENU_ADS
     if ROLE == ROLE_SUPERADMIN:
         menu = menu + ["Admin Panel"]
@@ -1344,22 +1503,27 @@ def safe_df_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 if PAGE_KEY == "Home":
     page_title("🏠 Home (Fast Search)", f"{SECTION}: Search properties quickly (optimized).")
 
-gq = st.session_state.get("global_search_term", "").strip()
-if gq:
-    st.markdown("### 🔎 Global Search Results")
-    res = global_search(gq)
-    any_hit = False
-    for mod, df in res.items():
-        if df is None or len(df) == 0:
-            continue
-        any_hit = True
-        with st.expander(f"{mod} — {len(df)} results", expanded=False):
-            st.dataframe(df, width='stretch', height=280)
-            if can(SECTION, "export", ROLE):
-                st.download_button(f"⬇ Export {mod} (CSV)", data=df_to_csv_bytes(df), file_name=f"{mod.replace(' ','_').lower()}_search.csv", mime="text/csv")
-    if not any_hit:
-        st.info("No results found in database modules for this search.")
-    st.markdown("---")
+    gq = st.session_state.get("global_search_term", "").strip()
+    if gq:
+        st.markdown("### 🔎 Global Search Results")
+        res = global_search(gq)
+        any_hit = False
+        for mod, df in res.items():
+            if df is None or len(df) == 0:
+                continue
+            any_hit = True
+            with st.expander(f"{mod} — {len(df)} results", expanded=False):
+                st.dataframe(df, width='stretch', height=280)
+                if can(SECTION, "export", ROLE):
+                    st.download_button(
+                        f"⬇ Export {mod} (CSV)",
+                        data=df_to_csv_bytes(df),
+                        file_name=f"{mod.replace(' ','_').lower()}_search.csv",
+                        mime="text/csv",
+                    )
+        if not any_hit:
+            st.info("No results found in database modules for this search.")
+        st.markdown("---")
 
     q = st.text_input("Search (Property / Promoter / Phone / Email)", placeholder="Type and press Enter…")
     df = leads_df
@@ -1381,6 +1545,233 @@ if gq:
                  "Promoter Mobile Number", "Promoter Email", "status", "assigned_to", "follow_up"]
     dfv = safe_df_cols(df, view_cols).iloc[start:end]
     st.dataframe(dfv, width='stretch', height=560)
+
+elif PAGE_KEY == "Management Dashboard":
+    page_title("📈 Management Dashboard", "Executive KPIs, coverage, funnel, and revenue snapshot.")
+
+    # KPIs from leads (CSV + lead_updates)
+    total_leads = len(leads_df.drop_duplicates("__hash"))
+    contacted = int((leads_df["status"] == "Contacted").sum())
+    pending = int((leads_df["status"] == "New").sum())
+    installed = int((leads_df["status"] == "Installed").sum())
+    conv = (installed / max(contacted, 1)) * 100.0
+
+    # Properties in database (inventory_sites)
+    inv_cnt = int(qdf("SELECT COUNT(*) AS c FROM inventory_sites").iloc[0]["c"] or 0)
+    active_sites = int(qdf("SELECT COUNT(*) AS c FROM inventory_sites WHERE COALESCE(no_screens_installed,0) > 0").iloc[0]["c"] or 0)
+
+    # District-wise count from leads
+    dist = leads_df.groupby("District", dropna=False).size().reset_index(name="properties").sort_values("properties", ascending=False).head(25)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: kpi("Total Leads (file)", f"{total_leads:,}")
+    with c2: kpi("Contacted", f"{contacted:,}")
+    with c3: kpi("Installed", f"{installed:,}")
+    with c4: kpi("Conversion % (Contacted→Installed)", f"{conv:.1f}%")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: kpi("Sites in DB", f"{inv_cnt:,}")
+    with c2: kpi("Active Sites (screens>0)", f"{active_sites:,}")
+    with c3: kpi("Pending (New)", f"{pending:,}")
+    with c4:
+        hi = 0
+        if column_exists("inventory_sites","high_value_flag"):
+            try:
+                hi = int(qdf("SELECT COUNT(*) AS c FROM inventory_sites WHERE COALESCE(high_value_flag,0)=1").iloc[0]["c"] or 0)
+            except Exception:
+                hi = 0
+        kpi("High-Value (flagged)", f"{hi:,}")
+
+    st.markdown("### 🗺 District Coverage (Top 25 by properties)")
+    st.dataframe(dist, width='stretch', height=360)
+
+    st.markdown("### 📌 Funnel Snapshot")
+    funnel = pd.DataFrame({
+        "Stage": ["New", "Contacted", "Follow-up Required", "Interested", "Installed", "Rejected/Not Suitable"],
+        "Count": [
+            int((leads_df["status"]=="New").sum()),
+            int((leads_df["status"]=="Contacted").sum()),
+            int((leads_df["status"]=="Follow-up Required").sum()),
+            int((leads_df["status"]=="Interested").sum()),
+            int((leads_df["status"]=="Installed").sum()),
+            int((leads_df["status"]=="Rejected/Not Suitable").sum()),
+        ]
+    })
+    st.dataframe(funnel, width='stretch', height=260)
+
+    st.markdown("### 💰 Revenue Snapshot (Agreements + Payments)")
+    try:
+        agr = qdf("SELECT section, status, COUNT(*) AS agreements, COALESCE(SUM(rent_pm),0) AS rent_sum FROM agreements GROUP BY section, status ORDER BY agreements DESC")
+        pay = qdf("SELECT section, status, COUNT(*) AS bills, COALESCE(SUM(amount),0) AS amount_sum FROM payments GROUP BY section, status ORDER BY bills DESC")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("Agreements")
+            st.dataframe(agr, width='stretch', height=260)
+        with c2:
+            st.caption("Billing & Reminders")
+            st.dataframe(pay, width='stretch', height=260)
+    except Exception as e:
+        st.info("Revenue tables are available but some fields may be empty yet.")
+
+elif PAGE_KEY == "Installation Opportunities":
+    page_title("🎯 Installation Opportunities", "Search and shortlist properties for screen installation.")
+
+    df = leads_df.drop_duplicates("__hash").copy()
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        district = st.selectbox("District", ["(All)"] + sorted(df["District"].fillna("").unique().tolist()))
+    with c2:
+        city = st.selectbox("City", ["(All)"] + sorted(df["City"].fillna("").unique().tolist()))
+    with c3:
+        status_f = st.selectbox("Lead Status", ["(All)"] + LEAD_STATUS)
+    with c4:
+        q = st.text_input("Search", placeholder="property / developer / phone / email")
+
+    if district != "(All)":
+        df = df[df["District"].fillna("") == district]
+    if city != "(All)":
+        df = df[df["City"].fillna("") == city]
+    if status_f != "(All)":
+        df = df[df["status"] == status_f]
+    if q.strip():
+        df = df[df["__search"].str.contains(re.escape(q.strip().lower()), na=False)]
+
+    # Smart filter buttons (rule-based placeholders; improve as you enrich DB columns)
+    b1, b2, b3, b4 = st.columns(4)
+    if b1.button("⭐ High ROI (rule-based)"):
+        # heuristic: 'Interested' + not installed
+        df = df[(df["status"].isin(["Interested","Follow-up Required","Contacted"])) & (df["status"] != "Installed")]
+    if b2.button("⏳ Near Completion (needs DB dates)"):
+        st.info("Near completion requires construction_end_date in inventory_sites/manual leads. Add those fields to enable this filter.")
+    if b3.button("🏗 Large Developers (needs grouping)"):
+        top_devs = df["Promoter / Developer Name"].value_counts().head(20).index.tolist()
+        df = df[df["Promoter / Developer Name"].isin(top_devs)]
+    if b4.button("🏬 Commercial + High Traffic (needs DB fields)"):
+        st.info("This filter requires property_type and footfall_estimate/visibility_score in inventory_sites/manual leads.")
+
+    st.markdown(f"<span class='badge badge-strong'>Results: {len(df):,}</span>", unsafe_allow_html=True)
+
+    view_cols = ["District","City","Property Name","Promoter / Developer Name","Promoter Mobile Number","Promoter Email","status","assigned_to","follow_up"]
+    st.dataframe(safe_df_cols(df, view_cols).head(800), width='stretch', height=560)
+
+elif PAGE_KEY == "Ads Opportunities":
+    page_title("💼 Ads Opportunities", "Find screens/sites to sell advertisements (availability + targeting).")
+
+    # Pull screens joined with inventory
+    base = """SELECT s.screen_id, s.property_id, s.screen_location, s.is_active,
+                     i.property_code, i.property_name, i.city, i.district, i.no_screens_installed,
+                     i.latitude, i.longitude
+              FROM screens s
+              LEFT JOIN inventory_sites i ON i.property_id = s.property_id"""
+    q = st.text_input("Search screens/sites", placeholder="screen id / property / city / district / location")
+    params = {}
+    where = []
+    if q.strip():
+        params["q"] = sql_q(q)
+        where.append(ilike_clause(["s.screen_id","i.property_code","i.property_name","i.city","i.district","s.screen_location"], "q"))
+    active_only = st.checkbox("Active screens only", value=True)
+    if active_only:
+        where.append("s.is_active=1")
+    sql = base + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY i.district, i.city LIMIT 2000"
+    scr = qdf(sql, params)
+    st.markdown(f"<span class='badge badge-strong'>Screens found: {len(scr):,}</span>", unsafe_allow_html=True)
+    st.dataframe(scr, width='stretch', height=520)
+
+    st.caption("Tip: Use Ad Sales Inventory page to create bookings and track clients/slots.")
+
+elif PAGE_KEY == "Tasks & Alerts":
+    page_title("⏰ Tasks & Alerts", "Follow-ups, surveys, permissions and due reminders.")
+
+    if not table_exists("tasks"):
+        st.error("Tasks module is not enabled. Run the migration SQL to create tasks table.")
+        st.stop()
+
+    only_mine = st.checkbox("Show only my tasks", value=True)
+    show_done = st.checkbox("Include Done/Cancelled", value=False)
+
+    where = []
+    params = {}
+    if only_mine:
+        where.append("assigned_to=:u")
+        params["u"] = USER
+    if not show_done:
+        where.append("status NOT IN ('Done','Cancelled')")
+
+    sql = "SELECT id, section, title, task_type, priority, status, assigned_to, due_date, created_at, created_by, notes FROM tasks"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY due_date NULLS LAST, created_at DESC LIMIT 2000"
+    tdf = qdf(sql, params)
+
+    st.markdown(f"<span class='badge badge-strong'>Tasks: {len(tdf):,}</span>", unsafe_allow_html=True)
+    st.dataframe(tdf, width='stretch', height=520)
+
+    st.markdown("### ➕ Quick Task Create")
+    can_add_task = can(SECTION, "edit", ROLE)
+    with st.form("quick_task"):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            title = st.text_input("Title", placeholder="Weekly follow-up, site visit, etc.")
+            task_type = st.selectbox("Type", ["Follow-up","Survey","Permission","Installation","Payment","AdCampaign","Other"], index=0)
+        with c2:
+            priority = st.selectbox("Priority", ["Low","Medium","High"], index=1)
+            due = st.date_input("Due", value=date.today()+timedelta(days=2))
+        with c3:
+            assignee = st.text_input("Assign to", value=USER)
+            status_t = st.selectbox("Status", ["Open","In Progress","Done","Cancelled"], index=0)
+        notes = st.text_area("Notes", height=80)
+        ok = st.form_submit_button("Create Task", type="primary", disabled=not can_add_task)
+    if ok:
+        exec_sql(
+            """INSERT INTO tasks(id,record_hash,section,title,task_type,priority,status,assigned_to,due_date,created_by,notes)
+                VALUES(:id,NULL,:s,:t,:tt,:p,:st,:a,:d,:by,:n)""",
+            {"id": str(uuid.uuid4()), "s": SECTION, "t": title or "Task", "tt": task_type, "p": priority, "st": status_t, "a": assignee, "d": due.isoformat(), "by": USER, "n": notes},
+        )
+        audit(USER, "ADD_TASK", f"section={SECTION} title={title}")
+        st.success("Task created.")
+        st.rerun()
+
+elif PAGE_KEY == "Reports":
+    page_title("📊 Reports", "Executive performance, funnel metrics, and coverage insights.")
+
+    # Performance by assignee
+    perf = leads_df.groupby(["assigned_to","status"]).size().reset_index(name="count")
+    st.markdown("### 👥 Executive Performance (Lead Status Counts)")
+    st.dataframe(perf.sort_values(["assigned_to","count"], ascending=[True,False]), width='stretch', height=420)
+
+    st.markdown("### 🗺 White-spot Districts (no Installed)")
+    dist_status = leads_df.groupby(["District","status"]).size().reset_index(name="count")
+    installed_by_dist = dist_status[dist_status["status"]=="Installed"][["District","count"]].rename(columns={"count":"installed"})
+    totals = leads_df.groupby("District").size().reset_index(name="total")
+    cov = totals.merge(installed_by_dist, on="District", how="left").fillna({"installed":0})
+    white = cov[cov["installed"]==0].sort_values("total", ascending=False).head(50)
+    st.dataframe(white, width='stretch', height=360)
+
+    st.markdown("### ⏱ Average Conversion Time (Contacted → Installed)")
+    if table_exists("lead_status_history"):
+        try:
+            # Compute per lead: first Contacted date and first Installed date
+            sh = qdf(
+                """SELECT record_hash, status_to, MIN(changed_at) AS first_at
+                   FROM lead_status_history
+                  WHERE section=:s AND status_to IN ('Contacted','Installed')
+                  GROUP BY record_hash, status_to""",
+                {"s": SECTION},
+            )
+            c = sh[sh["status_to"]=="Contacted"].rename(columns={"first_at":"contacted_at"})
+            i = sh[sh["status_to"]=="Installed"].rename(columns={"first_at":"installed_at"})
+            merged = c.merge(i, on="record_hash", how="inner")
+            if len(merged):
+                merged["days"] = (pd.to_datetime(merged["installed_at"]) - pd.to_datetime(merged["contacted_at"])).dt.days
+                st.write(f"Average days: **{merged['days'].mean():.1f}** (based on {len(merged)} conversions)")
+                st.dataframe(merged[["record_hash","contacted_at","installed_at","days"]].sort_values("days").head(100), width='stretch', height=320)
+            else:
+                st.info("No conversions found in status history yet.")
+        except Exception:
+            st.info("Status history exists, but not enough data yet for conversion timing.")
+    else:
+        st.info("Conversion timing needs lead_status_history table (run migration SQL).")
 
 elif PAGE_KEY == "Leads Pipeline":
     page_title("🧩 Leads (Update Status)", "Open one lead and update status, notes, follow-up.")
@@ -1419,10 +1810,127 @@ elif PAGE_KEY == "Leads Pipeline":
         st.info("Your role is read-only for edits.")
 
     if st.button("✅ Save Update", type="primary", disabled=save_disabled):
-        upsert_lead_update(SECTION, pid, status, assigned, row.get("lead_source") or "Cold Call", notes, follow, outcome or None)
+        upsert_lead_update(SECTION, pid, status, assigned, row.get("lead_source") or "Cold Call", notes, follow, outcome or None, username=USER)
         audit(USER, "LEAD_UPDATE", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} status={status}")
         st.success("Saved.")
         st.rerun()
+# --- Lead 360 (Interactions / Tasks / Status History) ---
+if table_exists("interactions") or table_exists("tasks") or table_exists("lead_status_history"):
+    st.markdown("---")
+    t_int, t_tasks, t_hist = st.tabs(["📒 Interactions", "⏰ Tasks & Alerts", "🧾 Status History"])
+
+    with t_int:
+        if not table_exists("interactions"):
+            st.info("Interactions table not found. Run the migration SQL to enable this module.")
+        else:
+            ints = qdf(
+                """SELECT interaction_date, mode, remarks, next_follow_up_date, created_by, attachment_url
+                   FROM interactions
+                  WHERE record_hash=:h AND section=:s
+                  ORDER BY interaction_date DESC
+                  LIMIT 300""",
+                {"h": pid, "s": SECTION},
+            )
+            st.markdown(f"<span class='badge badge-strong'>Interactions: {len(ints):,}</span>", unsafe_allow_html=True)
+            st.dataframe(ints, width='stretch', height=260)
+
+            can_add_int = can(SECTION, "edit", ROLE)
+            with st.form("add_interaction"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    mode = st.selectbox("Mode", ["Call", "Email", "WhatsApp", "Visit"], index=0)
+                with c2:
+                    next_fu = st.date_input("Next follow-up date (optional)", value=None)
+                with c3:
+                    attach = st.text_input("Attachment URL (optional)")
+                remarks = st.text_area("Remarks", height=90)
+                ok = st.form_submit_button("➕ Add Interaction", type="primary", disabled=not can_add_int)
+            if ok:
+                exec_sql(
+                    """INSERT INTO interactions(id,record_hash,section,mode,remarks,next_follow_up_date,created_by,attachment_url)
+                        VALUES(:id,:h,:s,:m,:r,:n,:by,:a)""",
+                    {
+                        "id": str(uuid.uuid4()),
+                        "h": pid,
+                        "s": SECTION,
+                        "m": mode,
+                        "r": remarks,
+                        "n": (next_fu.isoformat() if next_fu else ""),
+                        "by": USER,
+                        "a": attach,
+                    },
+                )
+                audit(USER, "ADD_INTERACTION", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} mode={mode}")
+                st.success("Interaction added.")
+                st.rerun()
+
+    with t_tasks:
+        if not table_exists("tasks"):
+            st.info("Tasks table not found. Run the migration SQL to enable this module.")
+        else:
+            # list tasks for this lead
+            tasks = qdf(
+                """SELECT title, task_type, priority, status, assigned_to, due_date, created_at, created_by, notes
+                   FROM tasks
+                  WHERE record_hash=:h AND (section=:s OR section IS NULL OR section='')
+                  ORDER BY CASE WHEN status='Done' THEN 1 ELSE 0 END, due_date NULLS LAST, created_at DESC
+                  LIMIT 300""",
+                {"h": pid, "s": SECTION},
+            )
+            st.markdown(f"<span class='badge badge-strong'>Tasks: {len(tasks):,}</span>", unsafe_allow_html=True)
+            st.dataframe(tasks, width='stretch', height=260)
+
+            can_add_task = can(SECTION, "edit", ROLE)
+            with st.form("add_task"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    title = st.text_input("Task title", placeholder="e.g., Site survey / Follow-up call / Permission letter")
+                    task_type = st.selectbox("Task type", ["Follow-up", "Survey", "Permission", "Installation", "Payment", "AdCampaign", "Other"], index=0)
+                with c2:
+                    priority = st.selectbox("Priority", ["Low", "Medium", "High"], index=1)
+                    due = st.date_input("Due date", value=date.today() + timedelta(days=2))
+                with c3:
+                    assignee = st.text_input("Assigned to", value=(row.get("assigned_to","") or USER))
+                    status_t = st.selectbox("Status", ["Open", "In Progress", "Done", "Cancelled"], index=0)
+                notes_t = st.text_area("Notes", height=80)
+                ok2 = st.form_submit_button("➕ Create Task", type="primary", disabled=not can_add_task)
+            if ok2:
+                exec_sql(
+                    """INSERT INTO tasks(id,record_hash,section,title,task_type,priority,status,assigned_to,due_date,created_by,notes)
+                        VALUES(:id,:h,:s,:t,:tt,:p,:st,:a,:d,:by,:n)""",
+                    {
+                        "id": str(uuid.uuid4()),
+                        "h": pid,
+                        "s": SECTION,
+                        "t": title or "Task",
+                        "tt": task_type,
+                        "p": priority,
+                        "st": status_t,
+                        "a": assignee,
+                        "d": due.isoformat() if due else "",
+                        "by": USER,
+                        "n": notes_t,
+                    },
+                )
+                audit(USER, "ADD_TASK", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} title={title}")
+                st.success("Task created.")
+                st.rerun()
+
+    with t_hist:
+        if not table_exists("lead_status_history"):
+            st.info("Status history table not found. Run the migration SQL to enable this module.")
+        else:
+            hist = qdf(
+                """SELECT changed_at, status_from, status_to, changed_by, note
+                   FROM lead_status_history
+                  WHERE record_hash=:h AND section=:s
+                  ORDER BY changed_at DESC
+                  LIMIT 300""",
+                {"h": pid, "s": SECTION},
+            )
+            st.markdown(f"<span class='badge badge-strong'>Status changes: {len(hist):,}</span>", unsafe_allow_html=True)
+            st.dataframe(hist, width='stretch', height=260)
+
 
 
 
@@ -1717,7 +2225,7 @@ elif PAGE_KEY == "Ad Sales Inventory":
     params: dict = {"s": SECTION}
     sql = "SELECT * FROM ad_inventory WHERE section=:s"
     if q.strip():
-        sql += " AND " + ilike_clause(['booking_id','property_id','client_name','screen_id','status','notes'], 'q')
+        sql += " AND " + ilike_clause(['ad_id','property_id','client_name','screen_id','status','notes'], 'q')
         params["q"] = sql_q(q)
     sql += " ORDER BY updated_at DESC LIMIT 3000"
     ad = qdf(sql, params)
