@@ -222,12 +222,17 @@ def db_engine():
         connect_args["hostaddr"] = ipv4  # psycopg/libpq will use this instead of IPv6
 
     try:
-        eng = create_engine(
-            url,
-            pool_pre_ping=True,
-            poolclass=NullPool,     # safest for serverless + pooler
-            connect_args=connect_args,
-        )
+ create_engine(
+    url,
+    pool_pre_ping=True,
+    poolclass=NullPool,
+
+    # 🚨 Critical fix for Supabase + PgBouncer + psycopg3
+    connect_args={
+        "prepare_threshold": 0,   # disables prepared statements
+        "connect_timeout": 10
+    },
+    )
         # smoke test
         with eng.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -288,8 +293,8 @@ def column_exists(table_name: str, column_name: str) -> bool:
 # =========================================================
 # MIGRATIONS + SEED (RUN ONCE PER SERVER)
 # =========================================================
-@st.cache_resource(show_spinner=False)
-def init_db_once():
+@st.cache_resource(ttl=3600)
+def db_engine():
     # tables
     exec_sql("""
     CREATE TABLE IF NOT EXISTS users(
