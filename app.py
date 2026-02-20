@@ -693,7 +693,72 @@ def db_engine():
 
     return True
 
+@st.cache_resource(show_spinner=False)
+def init_db_once():
+    """
+    Safe DB bootstrap.
+    - Does NOT break existing tables.
+    - Creates only lightweight helper tables if missing.
+    - If you already ran your migration manually, this will do almost nothing.
+    """
+    # If DB is not reachable, fail early with your existing db_engine error handling
+    _ = db_engine()
 
+    # Minimal tables that the app expects in many pages
+    # (Create only if missing. Safe for existing data.)
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS audit_logs(
+        id TEXT PRIMARY KEY,
+        actor TEXT,
+        action TEXT,
+        details TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+    );
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS tasks(
+        id TEXT PRIMARY KEY,
+        record_hash TEXT,
+        section TEXT,
+        title TEXT,
+        task_type TEXT,
+        priority TEXT,
+        status TEXT,
+        assigned_to TEXT,
+        due_date TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        created_by TEXT,
+        notes TEXT
+    );
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS interactions(
+        id TEXT PRIMARY KEY,
+        record_hash TEXT,
+        section TEXT,
+        interaction_date TIMESTAMP DEFAULT NOW(),
+        mode TEXT,
+        remarks TEXT,
+        next_follow_up_date TEXT,
+        created_by TEXT,
+        attachment_url TEXT
+    );
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS lead_status_history(
+        id TEXT PRIMARY KEY,
+        record_hash TEXT,
+        section TEXT,
+        changed_at TIMESTAMP DEFAULT NOW(),
+        status_from TEXT,
+        status_to TEXT,
+        changed_by TEXT,
+        note TEXT
+    );
+    """)
 
 init_db_once()
 
