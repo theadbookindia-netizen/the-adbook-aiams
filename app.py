@@ -160,15 +160,21 @@ st.markdown(
 
 
 # =========================================================
-# DATABASE (SUPABASE) - FIXED FOR POOLER + IPV6 + PERFORMANCE
+# DATABASE (SUPABASE) - SIMPLE + SAFE (POOLER FIRST, DIRECT FALLBACK, IPV4 FORCE)
 # =========================================================
-import re
+import os
+import socket
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+
+import pandas as pd
+import streamlit as st
 from sqlalchemy import create_engine, text
-from sqlalchemy.pool import NullPool
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import NullPool
+
 
 def get_database_url() -> str:
-    # Priority: Streamlit Secrets -> Env var
+    """Reads DATABASE_URL from Streamlit secrets first, then environment variable."""
     try:
         if "DATABASE_URL" in st.secrets:
             return str(st.secrets["DATABASE_URL"]).strip()
@@ -177,43 +183,81 @@ def get_database_url() -> str:
     return os.environ.get("DATABASE_URL", "").strip()
 
 
-def _looks_like_ipv6_host(url: str) -> bool:
-    """
-    Detects IPv6 literal in host position, e.g. postgresql://user:pw@2406:da18:...:5432/db
-    """
-    # extract host between '@' and ':' or '/' (rough but effective)
-    if "@" not in url:
-        return False
-    hostport = url.split("@", 1)[1]
-    host = hostport.split("/", 1)[0]
-    # strip possible :port
-    host_only = host.rsplit(":", 1)[0] if ":" in host and host.count(":") >= 2 else host.split(":", 1)[0]
-    # heuristic: ipv6 has multiple ':'
-    return host_only.count(":") >= 2
-
-
 def _force_psycopg3(url: str) -> str:
-    """
-    Ensures SQLAlchemy uses psycopg3 if installed.
-    """
+    """Make sure we use psycopg3 driver in SQLAlchemy URL."""
     u = url.strip()
     if u.startswith("postgres://"):
         u = u.replace("postgres://", "postgresql://", 1)
-
-    # If no explicit driver, prefer psycopg3
     if u.startswith("postgresql://"):
         u = u.replace("postgresql://", "postgresql+psycopg://", 1)
-
-    # If user set psycopg2 but environment lacks it, swap to psycopg3
     if u.startswith("postgresql+psycopg2://"):
         u = u.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
-
     return u
 
 
 def _is_pooler(url: str) -> bool:
-    # Supabase pooler host typically contains ".pooler.supabase.com" or port 6543
-    return (".pooler.supabase.com" in url) or (":6543/" in url) or (":6543?" in url)
+    """Detect Supabase pooler URL."""
+    return ".pooler.supabase.com" in url or ":6543/" in url or ":6543?" in url
+
+
+def _ipv4_for_host(host: str) -> str | None:
+    """Resolve an IPv4 address for host (avoids IPv6 connect issues)."""
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+        if infos:
+            return infos[0][4][0]
+    except Exception:
+        return None
+    return None
+
+
+def _add_hostaddr(url: str, ipv4: str) -> str:
+    """Force IPv4 by adding hostaddr=<ipv4>."""
+    p = urlparse(url)
+    qs = dict(parse_qsl(p.query, keep_blank_values=True))
+    qs["hostaddr"] = ipv4
+    new_query = urlencode(qs)
+    return urlunparse((p.scheme, p.netloc, p.path, p.params, new_query, p.fragment))
+
+
+def _derive_direct_from_pooler(pooler_url: str) -> str | None:
+    """
+    Convert pooler URL to direct DB URL.
+    Pooler user: postgres.<project_ref>
+    Direct host: db.<project_ref>.supabase.co
+    Direct user: postgres
+    Direct port: 5432
+    """
+    try:
+        p = urlparse(pooler_url)
+        userinfo, _hostport = p.netloc.split("@", 1)
+        user, pw = userinfo.split(":", 1)
+
+        if not user.startswith("postgres."):
+            return None
+
+        project_ref = user.split("postgres.", 1)[1]
+        direct_host = f"db.{project_ref}.supabase.co"
+        direct_netloc = f"postgres:{pw}@{direct_host}:5432"
+
+        qs = dict(parse_qsl(p.query, keep_blank_values=True))
+        qs.setdefault("sslmode", "require")
+
+        return urlunparse(("postgresql+psycopg", direct_netloc, p.path or "/postgres", "", urlencode(qs), ""))
+    except Exception:
+        return None
+
+
+def _try_engine(url: str):
+    """Create and test engine."""
+    connect_args = {
+        "connect_timeout": 10,
+        "prepare_threshold": 0,  # IMPORTANT: stable for pooler/pgbouncer
+    }
+    eng = create_engine(url, pool_pre_ping=True, poolclass=NullPool, connect_args=connect_args)
+    with eng.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    return eng
 
 
 @st.cache_resource(show_spinner=False)
@@ -223,49 +267,33 @@ def db_engine():
         st.error("DATABASE_URL not found. Add it in Streamlit Secrets or environment variable.")
         st.stop()
 
-    # Always prefer psycopg3 driver string.
     url = _force_psycopg3(db_url)
 
-    # If URL host is an IPv6 literal, many hosts (Streamlit Cloud) cannot connect via IPv6.
-    # Fail fast with a clear message so user switches to pooler or IPv4-resolving host.
-    if _looks_like_ipv6_host(url):
-        st.error("Database host resolves to IPv6, but this environment cannot open IPv6 connections.")
-        st.caption("Fix: Use Supabase Pooler (port 6543) or a hostname that resolves to IPv4. Do NOT use raw IPv6 host in DATABASE_URL.")
-        st.code(url.replace(url.split(":")[2], "****"))  # crude redaction; avoid leaking full url
-        st.stop()
-
-    # Connection args tuned for PgBouncer/pooler stability + faster failure
-    connect_args = {
-        "connect_timeout": 10,
-        # IMPORTANT: PgBouncer + psycopg3 can break with prepared statements; disable them.
-        "prepare_threshold": 0,
-        # Optional safety: avoid runaway queries (seconds)
-        # "options": "-c statement_timeout=15000",
-    }
-
+    # 1) Try the provided URL first (usually Pooler 6543)
     try:
-        eng = create_engine(
-            url,
-            pool_pre_ping=True,
-            poolclass=NullPool,  # safest with Supabase Pooler/PgBouncer and serverless
-            connect_args=connect_args,
-        )
+        return _try_engine(url)
+    except Exception as e1:
+        # 2) If it was a pooler URL and timed out, try direct DB fallback (5432)
+        if _is_pooler(url):
+            direct = _derive_direct_from_pooler(url)
+            if direct:
+                # Force IPv4 so we avoid "Cannot assign requested address" (IPv6 problem)
+                p = urlparse(direct)
+                host = p.hostname or ""
+                ipv4 = _ipv4_for_host(host)
+                if ipv4:
+                    direct = _add_hostaddr(direct, ipv4)
 
-        # Quick smoke-test to catch bad credentials / tenant / URL immediately
-        with eng.connect() as conn:
-            conn.execute(text("SELECT 1"))
+                try:
+                    return _try_engine(direct)
+                except Exception as e2:
+                    st.error("Database connection failed (Pooler failed and Direct DB also failed).")
+                    st.caption("This usually means your hosting blocks outbound ports 6543 and 5432.")
+                    st.exception(e2)
+                    st.stop()
 
-        return eng
-
-    except Exception as e:
         st.error("Database connection failed.")
-        st.caption(
-            "Common fixes:\n"
-            "- If using Supabase Pooler, username must be postgres.<project_ref> and port 6543.\n"
-            "- If using Direct DB (5432), username is usually postgres and host is db.<project_ref>.supabase.co.\n"
-            "- Ensure requirements.txt includes: SQLAlchemy and psycopg[binary]."
-        )
-        st.exception(e)
+        st.exception(e1)
         st.stop()
 
 
@@ -311,7 +339,6 @@ def column_exists(table_name: str, column_name: str) -> bool:
         {"t": table_name, "c": column_name},
     )
     return bool(df.iloc[0]["ex"])
-
 
 # =========================================================
 # MIGRATIONS + SEED (RUN ONCE PER SERVER)
