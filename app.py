@@ -160,15 +160,60 @@ st.markdown(
 
 
 # =========================================================
-# DATABASE (SUPABASE)
+# DATABASE (SUPABASE) - FIXED FOR POOLER + IPV6 + PERFORMANCE
 # =========================================================
+import re
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
+from sqlalchemy.exc import SQLAlchemyError
+
 def get_database_url() -> str:
+    # Priority: Streamlit Secrets -> Env var
     try:
         if "DATABASE_URL" in st.secrets:
             return str(st.secrets["DATABASE_URL"]).strip()
     except Exception:
         pass
     return os.environ.get("DATABASE_URL", "").strip()
+
+
+def _looks_like_ipv6_host(url: str) -> bool:
+    """
+    Detects IPv6 literal in host position, e.g. postgresql://user:pw@2406:da18:...:5432/db
+    """
+    # extract host between '@' and ':' or '/' (rough but effective)
+    if "@" not in url:
+        return False
+    hostport = url.split("@", 1)[1]
+    host = hostport.split("/", 1)[0]
+    # strip possible :port
+    host_only = host.rsplit(":", 1)[0] if ":" in host and host.count(":") >= 2 else host.split(":", 1)[0]
+    # heuristic: ipv6 has multiple ':'
+    return host_only.count(":") >= 2
+
+
+def _force_psycopg3(url: str) -> str:
+    """
+    Ensures SQLAlchemy uses psycopg3 if installed.
+    """
+    u = url.strip()
+    if u.startswith("postgres://"):
+        u = u.replace("postgres://", "postgresql://", 1)
+
+    # If no explicit driver, prefer psycopg3
+    if u.startswith("postgresql://"):
+        u = u.replace("postgresql://", "postgresql+psycopg://", 1)
+
+    # If user set psycopg2 but environment lacks it, swap to psycopg3
+    if u.startswith("postgresql+psycopg2://"):
+        u = u.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
+
+    return u
+
+
+def _is_pooler(url: str) -> bool:
+    # Supabase pooler host typically contains ".pooler.supabase.com" or port 6543
+    return (".pooler.supabase.com" in url) or (":6543/" in url) or (":6543?" in url)
 
 
 @st.cache_resource(show_spinner=False)
@@ -178,43 +223,50 @@ def db_engine():
         st.error("DATABASE_URL not found. Add it in Streamlit Secrets or environment variable.")
         st.stop()
 
-    # SQLAlchemy driver handling:
-    # - Prefer psycopg (psycopg3) because it supports modern Python versions (incl. 3.13) well.
-    # - Fall back to psycopg2 if you explicitly use +psycopg2 and have it installed.
-    url = db_url.strip()
+    # Always prefer psycopg3 driver string.
+    url = _force_psycopg3(db_url)
 
-    # If user provided plain postgres URL, pick a driver explicitly to avoid implicit psycopg2 requirement.
-    if url.startswith("postgresql://") or url.startswith("postgres://"):
-        try:
-            import psycopg  # type: ignore
-            url = url.replace("postgres://", "postgresql+psycopg://", 1).replace("postgresql://", "postgresql+psycopg://", 1)
-        except Exception:
-            # If psycopg isn't installed, keep the url as-is and let SQLAlchemy raise a helpful error.
-            pass
-
-    # If user provided psycopg2 URL but psycopg2 isn't installed, auto-switch to psycopg if available.
-    if "postgresql+psycopg2://" in url:
-        try:
-            import psycopg2  # type: ignore
-        except Exception:
-            try:
-                import psycopg  # type: ignore
-                url = url.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
-            except Exception:
-                pass
-
-    try:
-        return create_engine(
-            url,
-            pool_pre_ping=True,
-            poolclass=NullPool,  # safest with Supabase Pooler/PgBouncer
-        )
-    except Exception as e:
-        st.error("Database driver not installed or invalid DATABASE_URL.")
-        st.caption("Fix: add `sqlalchemy` and `psycopg[binary]` to requirements.txt (recommended), or install `psycopg2-binary` if you insist on +psycopg2.")
-        st.exception(e)
+    # If URL host is an IPv6 literal, many hosts (Streamlit Cloud) cannot connect via IPv6.
+    # Fail fast with a clear message so user switches to pooler or IPv4-resolving host.
+    if _looks_like_ipv6_host(url):
+        st.error("Database host resolves to IPv6, but this environment cannot open IPv6 connections.")
+        st.caption("Fix: Use Supabase Pooler (port 6543) or a hostname that resolves to IPv4. Do NOT use raw IPv6 host in DATABASE_URL.")
+        st.code(url.replace(url.split(":")[2], "****"))  # crude redaction; avoid leaking full url
         st.stop()
 
+    # Connection args tuned for PgBouncer/pooler stability + faster failure
+    connect_args = {
+        "connect_timeout": 10,
+        # IMPORTANT: PgBouncer + psycopg3 can break with prepared statements; disable them.
+        "prepare_threshold": 0,
+        # Optional safety: avoid runaway queries (seconds)
+        # "options": "-c statement_timeout=15000",
+    }
+
+    try:
+        eng = create_engine(
+            url,
+            pool_pre_ping=True,
+            poolclass=NullPool,  # safest with Supabase Pooler/PgBouncer and serverless
+            connect_args=connect_args,
+        )
+
+        # Quick smoke-test to catch bad credentials / tenant / URL immediately
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
+
+        return eng
+
+    except Exception as e:
+        st.error("Database connection failed.")
+        st.caption(
+            "Common fixes:\n"
+            "- If using Supabase Pooler, username must be postgres.<project_ref> and port 6543.\n"
+            "- If using Direct DB (5432), username is usually postgres and host is db.<project_ref>.supabase.co.\n"
+            "- Ensure requirements.txt includes: SQLAlchemy and psycopg[binary]."
+        )
+        st.exception(e)
+        st.stop()
 
 
 def exec_sql(sql: str, params: dict | None = None) -> None:
@@ -236,6 +288,7 @@ def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
         st.code(str(e))
         st.stop()
 
+
 @st.cache_data(show_spinner=False, ttl=300)
 def table_exists(table_name: str) -> bool:
     df = qdf(
@@ -246,6 +299,7 @@ def table_exists(table_name: str) -> bool:
         {"t": table_name},
     )
     return bool(df.iloc[0]["ex"])
+
 
 @st.cache_data(show_spinner=False, ttl=300)
 def column_exists(table_name: str, column_name: str) -> bool:
