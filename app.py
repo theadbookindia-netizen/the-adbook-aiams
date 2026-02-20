@@ -160,21 +160,18 @@ st.markdown(
 
 
 # =========================================================
-# DATABASE (SUPABASE) - SIMPLE + SAFE (POOLER FIRST, DIRECT FALLBACK, IPV4 FORCE)
+# DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL + PERF
 # =========================================================
-import os
-import socket
-from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
-
-import pandas as pd
+import os, socket
+from urllib.parse import urlparse
 import streamlit as st
+import pandas as pd
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import NullPool
-
+from sqlalchemy.exc import SQLAlchemyError
 
 def get_database_url() -> str:
-    """Reads DATABASE_URL from Streamlit secrets first, then environment variable."""
+    # Priority: Streamlit Secrets -> Env var
     try:
         if "DATABASE_URL" in st.secrets:
             return str(st.secrets["DATABASE_URL"]).strip()
@@ -182,26 +179,20 @@ def get_database_url() -> str:
         pass
     return os.environ.get("DATABASE_URL", "").strip()
 
-
 def _force_psycopg3(url: str) -> str:
-    """Make sure we use psycopg3 driver in SQLAlchemy URL."""
-    u = url.strip()
+    u = (url or "").strip()
     if u.startswith("postgres://"):
         u = u.replace("postgres://", "postgresql://", 1)
+    # If no explicit driver, force psycopg3
     if u.startswith("postgresql://"):
         u = u.replace("postgresql://", "postgresql+psycopg://", 1)
+    # If psycopg2 was specified, switch to psycopg3
     if u.startswith("postgresql+psycopg2://"):
         u = u.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
     return u
 
-
-def _is_pooler(url: str) -> bool:
-    """Detect Supabase pooler URL."""
-    return ".pooler.supabase.com" in url or ":6543/" in url or ":6543?" in url
-
-
-def _ipv4_for_host(host: str) -> str | None:
-    """Resolve an IPv4 address for host (avoids IPv6 connect issues)."""
+def _resolve_ipv4(host: str) -> str | None:
+    """Return an IPv4 for host if available (prevents IPv6 routing failures)."""
     try:
         infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
         if infos:
@@ -210,92 +201,49 @@ def _ipv4_for_host(host: str) -> str | None:
         return None
     return None
 
-
-def _add_hostaddr(url: str, ipv4: str) -> str:
-    """Force IPv4 by adding hostaddr=<ipv4>."""
-    p = urlparse(url)
-    qs = dict(parse_qsl(p.query, keep_blank_values=True))
-    qs["hostaddr"] = ipv4
-    new_query = urlencode(qs)
-    return urlunparse((p.scheme, p.netloc, p.path, p.params, new_query, p.fragment))
-
-
-def _derive_direct_from_pooler(pooler_url: str) -> str | None:
-    """
-    Convert pooler URL to direct DB URL.
-    Pooler user: postgres.<project_ref>
-    Direct host: db.<project_ref>.supabase.co
-    Direct user: postgres
-    Direct port: 5432
-    """
-    try:
-        p = urlparse(pooler_url)
-        userinfo, _hostport = p.netloc.split("@", 1)
-        user, pw = userinfo.split(":", 1)
-
-        if not user.startswith("postgres."):
-            return None
-
-        project_ref = user.split("postgres.", 1)[1]
-        direct_host = f"db.{project_ref}.supabase.co"
-        direct_netloc = f"postgres:{pw}@{direct_host}:5432"
-
-        qs = dict(parse_qsl(p.query, keep_blank_values=True))
-        qs.setdefault("sslmode", "require")
-
-        return urlunparse(("postgresql+psycopg", direct_netloc, p.path or "/postgres", "", urlencode(qs), ""))
-    except Exception:
-        return None
-
-
-def _try_engine(url: str):
-    """Create and test engine."""
-    connect_args = {
-        "connect_timeout": 10,
-        "prepare_threshold": 0,  # IMPORTANT: stable for pooler/pgbouncer
-    }
-    eng = create_engine(url, pool_pre_ping=True, poolclass=NullPool, connect_args=connect_args)
-    with eng.connect() as conn:
-        conn.execute(text("SELECT 1"))
-    return eng
-
-
 @st.cache_resource(show_spinner=False)
 def db_engine():
     db_url = get_database_url()
     if not db_url:
-        st.error("DATABASE_URL not found. Add it in Streamlit Secrets or environment variable.")
+        st.error("DATABASE_URL not found. Add it to Streamlit Secrets (recommended) or env var.")
         st.stop()
 
     url = _force_psycopg3(db_url)
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
 
-    # 1) Try the provided URL first (usually Pooler 6543)
+    # Force IPv4 (fixes: Cannot assign requested address on IPv6-only resolution)
+    ipv4 = _resolve_ipv4(host)
+    connect_args = {
+        "connect_timeout": 10,
+        "prepare_threshold": 0,   # IMPORTANT for Supabase pooler / PgBouncer stability
+    }
+    if ipv4:
+        connect_args["hostaddr"] = ipv4  # psycopg/libpq will use this instead of IPv6
+
     try:
-        return _try_engine(url)
-    except Exception as e1:
-        # 2) If it was a pooler URL and timed out, try direct DB fallback (5432)
-        if _is_pooler(url):
-            direct = _derive_direct_from_pooler(url)
-            if direct:
-                # Force IPv4 so we avoid "Cannot assign requested address" (IPv6 problem)
-                p = urlparse(direct)
-                host = p.hostname or ""
-                ipv4 = _ipv4_for_host(host)
-                if ipv4:
-                    direct = _add_hostaddr(direct, ipv4)
+        eng = create_engine(
+            url,
+            pool_pre_ping=True,
+            poolclass=NullPool,     # safest for serverless + pooler
+            connect_args=connect_args,
+        )
+        # smoke test
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return eng
 
-                try:
-                    return _try_engine(direct)
-                except Exception as e2:
-                    st.error("Database connection failed (Pooler failed and Direct DB also failed).")
-                    st.caption("This usually means your hosting blocks outbound ports 6543 and 5432.")
-                    st.exception(e2)
-                    st.stop()
-
+    except Exception as e:
         st.error("Database connection failed.")
-        st.exception(e1)
+        st.caption(
+            "Checklist:\n"
+            "• Pooler URL must be port 6543 and username postgres.<project_ref>\n"
+            "• Direct DB URL must be db.<project_ref>.supabase.co:5432 and username postgres\n"
+            "• Use psycopg3 (requirements: psycopg[binary] + SQLAlchemy)\n"
+            "• If your runtime blocks outbound ports, DB connect will fail even with correct URL."
+        )
+        st.exception(e)
         st.stop()
-
 
 def exec_sql(sql: str, params: dict | None = None) -> None:
     try:
@@ -306,7 +254,6 @@ def exec_sql(sql: str, params: dict | None = None) -> None:
         st.code(str(e))
         st.stop()
 
-
 def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
     try:
         with db_engine().connect() as conn:
@@ -316,18 +263,16 @@ def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
         st.code(str(e))
         st.stop()
 
-
 @st.cache_data(show_spinner=False, ttl=300)
 def table_exists(table_name: str) -> bool:
     df = qdf(
         """SELECT EXISTS(
                SELECT 1 FROM information_schema.tables
                WHERE table_schema='public' AND table_name=:t
-             ) AS ex""",
+        ) AS ex""",
         {"t": table_name},
     )
     return bool(df.iloc[0]["ex"])
-
 
 @st.cache_data(show_spinner=False, ttl=300)
 def column_exists(table_name: str, column_name: str) -> bool:
@@ -335,7 +280,7 @@ def column_exists(table_name: str, column_name: str) -> bool:
         """SELECT EXISTS(
                SELECT 1 FROM information_schema.columns
                WHERE table_schema='public' AND table_name=:t AND column_name=:c
-             ) AS ex""",
+        ) AS ex""",
         {"t": table_name, "c": column_name},
     )
     return bool(df.iloc[0]["ex"])
