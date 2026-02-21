@@ -169,44 +169,38 @@ import os, socket
 
 @st.cache_resource(show_spinner=False)
 def db_engine():
-    url = (os.environ.get("DATABASE_URL") or "").strip()
-    if not url:
-        st.error("DATABASE_URL not found in Streamlit Secrets.")
+    db_url = get_database_url()
+    if not db_url:
+        st.error("DATABASE_URL not found in Streamlit secrets.")
         st.stop()
 
-    # Force psycopg v3 driver
-    if url.startswith("postgresql://"):
+    # normalize scheme + force psycopg3 driver
+    url = db_url.strip()
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    if url.startswith("postgresql://") and "+psycopg" not in url:
         url = url.replace("postgresql://", "postgresql+psycopg://", 1)
 
-    # Ensure SSL
-    if "sslmode=" not in url:
-        url += ("&" if "?" in url else "?") + "sslmode=require"
-
+    # ---- Force IPv4 (fix for "Cannot assign requested address" on IPv6) ----
+    parsed = urlparse(url.replace("postgresql+psycopg://", "postgresql://", 1))
+    host = parsed.hostname or ""
     connect_args = {}
+    ipv4 = _resolve_ipv4(host)
+    if ipv4:
+        connect_args["hostaddr"] = ipv4  # psycopg supports this
 
-    # Optional IPv4 forcing (helps when DNS returns IPv6 but runtime can't use it)
-    try:
-        host = url.split("@", 1)[1].split("/", 1)[0].split(":", 1)[0]
-        ipv4 = socket.gethostbyname(host)  # resolves to IPv4 if possible
-        if ipv4:
-            connect_args["hostaddr"] = ipv4
-    except Exception:
-        pass
+    eng = create_engine(
+        url,
+        pool_pre_ping=True,
+        poolclass=NullPool,
+        connect_args=connect_args,
+    )
 
-    try:
-        eng = create_engine(
-            url,
-            pool_pre_ping=True,
-            poolclass=NullPool,   # safest with Supabase Pooler/PgBouncer
-            connect_args=connect_args,
-        )
+    # smoke test
+    with eng.connect() as conn:
+        conn.execute(text("SELECT 1"))
 
-        # Smoke test
-        with eng.connect() as conn:
-            conn.execute(text("SELECT 1"))
-
-        return eng  # ✅ correct indentation (outside "with")
-
+    return eng
     except Exception as e:
         st.error("Database connection failed.")
         st.caption(
