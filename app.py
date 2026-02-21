@@ -1538,7 +1538,42 @@ if "active_pid" not in st.session_state:
     st.session_state["active_pid"] = ""
 
 pid = st.session_state["active_pid"]
+# =========================================================
+# LEADS FILE READER (required by router)
+# Paste ABOVE the first call: read_leads_file(upload)
+# =========================================================
+import io  # ensure exists
 
+# If your app already defines DATA_FILE elsewhere, keep that and REMOVE this line.
+DATA_FILE = globals().get("DATA_FILE", "leads.csv")
+
+def read_leads_file(upload=None):
+    """
+    Returns (leads_df, version_key)
+    Works for:
+      - upload from st.file_uploader
+      - local file fallback (DATA_FILE)
+    """
+    # Local fallback if no upload provided
+    if upload is None:
+        if not os.path.exists(DATA_FILE):
+            st.error(f"Missing {DATA_FILE}. Upload a file OR add {DATA_FILE} to repo.")
+            st.stop()
+        df = pd.read_csv(DATA_FILE)
+        version_key = f"local:{os.path.getmtime(DATA_FILE)}"
+    else:
+        raw = upload.getvalue()
+        version_key = f"upload:{len(raw)}:{hash(raw)}"
+        df = pd.read_csv(io.BytesIO(raw))
+
+    # Normalize columns
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # If your app has prepare_leads_df(), apply it (keeps your existing behavior)
+    if "prepare_leads_df" in globals() and callable(globals()["prepare_leads_df"]):
+        df = prepare_leads_df(df)
+
+    return df, version_key
 # =========================================================
 # LOAD LEADS (CACHED PREP) + CODES ONLY WHEN FILE CHANGES
 # =========================================================
