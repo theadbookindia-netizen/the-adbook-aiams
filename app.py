@@ -216,9 +216,15 @@ def db_engine():
     ipv4 = _resolve_ipv4(host)
 
     # ✅ PgBouncer/Supabase pooler stability: disable prepared statements
-    connect_args = {
-        "connect_timeout": 10,
-        "prepare_threshold": 0,
+connect_args = {
+    "connect_timeout": 10,
+
+    # ✅ Supabase Pooler / PgBouncer fix
+    "prepare_threshold": 0,
+    "prepared_statement_cache_size": 0,
+}
+if ipv4:
+    connect_args["hostaddr"] = ipv4
     }
     if ipv4:
         connect_args["hostaddr"] = ipv4
@@ -293,7 +299,9 @@ def column_exists(table_name: str, column_name: str) -> bool:
 # MIGRATIONS + SEED (RUN ONCE PER SERVER)
 # =========================================================
 @st.cache_resource(show_spinner=False)
-def init_db_once():
+if "db_bootstrapped" not in st.session_state:
+    init_db_once()
+    st.session_state["db_bootstrapped"] = True
     # tables
     exec_sql("""
     CREATE TABLE IF NOT EXISTS users(
