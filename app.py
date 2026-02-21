@@ -4,6 +4,7 @@ import io
 import uuid
 import hashlib
 from datetime import date, timedelta
+import json
 from pathlib import Path
 from urllib.parse import quote_plus
 from io import BytesIO
@@ -32,36 +33,109 @@ SECTION_INSTALL = "Installation"
 SECTION_ADS = "Advertisement"
 SCOPE_BOTH = "Both"
 
-ROLE_SUPERADMIN = "SuperAdmin"
-ROLE_HEAD = "HeadOps"
-ROLE_INSTALL_MGR = "InstallManager"
-ROLE_ADS_MGR = "AdsManager"
-ROLE_INSTALL_FIELD = "InstallField"
-ROLE_ADS_FIELD = "AdsField"
-ROLE_VIEWER = "Viewer"
-ROLE_EXECUTIVE = "Executive"
+# =========================================================
+# ROLES (NEW - REQUIRED)
+# =========================================================
+ROLE_SUPER_ADMIN = "SUPER_ADMIN"
+ROLE_MARKETING_HEAD = "MARKETING_HEAD"
+
+ROLE_INSTALLATION_MANAGER = "INSTALLATION_MANAGER"
+ROLE_INSTALLATION_MARKETING = "INSTALLATION_MARKETING"
+ROLE_INSTALLATION_FIELD = "INSTALLATION_FIELD"
+ROLE_VIEWER_INSTALLATION = "VIEWER_INSTALLATION"
+
+ROLE_ADS_MANAGER = "ADS_MANAGER"
+ROLE_ADS_MARKETING = "ADS_MARKETING"
+ROLE_ADS_FIELD = "ADS_FIELD"
+ROLE_VIEWER_ADS = "VIEWER_ADS"
+
+# Backward-compatible aliases for older role names that may already exist in DB
+ROLE_ALIASES = {
+    # older constants used in your file
+    "SuperAdmin": ROLE_SUPER_ADMIN,
+    "HeadOps": ROLE_MARKETING_HEAD,
+    "InstallManager": ROLE_INSTALLATION_MANAGER,
+    "InstallField": ROLE_INSTALLATION_FIELD,
+    "AdsManager": ROLE_ADS_MANAGER,
+    "AdsField": ROLE_ADS_FIELD,
+    "Viewer": None,  # resolved dynamically by section scope
+    "Executive": ROLE_MARKETING_HEAD,  # treat as head for dashboards/export
+    # older seeded names (with spaces)
+    "Super Admin": ROLE_SUPER_ADMIN,
+    "Head Ops": ROLE_MARKETING_HEAD,
+    "Installation Manager": ROLE_INSTALLATION_MANAGER,
+    "Advertisement Manager": ROLE_ADS_MANAGER,
+    "Field Team (Installation)": ROLE_INSTALLATION_FIELD,
+    "Field Team (Advertisement)": ROLE_ADS_FIELD,
+}
+
+ADMIN_HEAD_ENABLED = False  # set True if MARKETING_HEAD should access Admin Panel too
 
 ROLE_LABEL = {
-    ROLE_EXECUTIVE: "Executive / CEO (Read-only dashboards)",
-    ROLE_SUPERADMIN: "Super Admin (All)",
-    ROLE_HEAD: "Head of Ops (All)",
-    ROLE_INSTALL_MGR: "Installation Manager",
-    ROLE_ADS_MGR: "Advertisement Manager",
-    ROLE_INSTALL_FIELD: "Field Team (Installation)",
-    ROLE_ADS_FIELD: "Field Team (Advertisement)",
-    ROLE_VIEWER: "Viewer (Read-only)",
+    ROLE_SUPER_ADMIN: "SUPER_ADMIN — Full access (All modules + admin)",
+    ROLE_MARKETING_HEAD: "MARKETING_HEAD — Management access (Both modules)",
+
+    ROLE_INSTALLATION_MANAGER: "INSTALLATION_MANAGER — Assign/Approve/Export (Installation)",
+    ROLE_INSTALLATION_MARKETING: "INSTALLATION_MARKETING — Assigned-only updates (Installation)",
+    ROLE_INSTALLATION_FIELD: "INSTALLATION_FIELD — Assigned-only updates + uploads (Installation)",
+    ROLE_VIEWER_INSTALLATION: "VIEWER_INSTALLATION — Read-only (Installation)",
+
+    ROLE_ADS_MANAGER: "ADS_MANAGER — Assign/Approve/Export (Advertisement)",
+    ROLE_ADS_MARKETING: "ADS_MARKETING — Assigned-only updates + proposals (Advertisement)",
+    ROLE_ADS_FIELD: "ADS_FIELD — Assigned-only updates + uploads (Advertisement)",
+    ROLE_VIEWER_ADS: "VIEWER_ADS — Read-only (Advertisement)",
 }
 
+def canonical_role(role: str, section_scope: str | None = None) -> str:
+    r = (role or "").strip()
+    if r in ROLE_ALIASES and ROLE_ALIASES[r]:
+        return ROLE_ALIASES[r]
+    if r == "Viewer":
+        # map legacy Viewer based on scope if possible
+        sc = (section_scope or "").strip()
+        return ROLE_VIEWER_INSTALLATION if sc == SECTION_INSTALL else ROLE_VIEWER_ADS
+    return r
+
+def role_default_scope(role: str) -> str:
+    r = canonical_role(role)
+    if r in [ROLE_SUPER_ADMIN, ROLE_MARKETING_HEAD]:
+        return SCOPE_BOTH
+    if r in [ROLE_INSTALLATION_MANAGER, ROLE_INSTALLATION_MARKETING, ROLE_INSTALLATION_FIELD, ROLE_VIEWER_INSTALLATION]:
+        return SECTION_INSTALL
+    if r in [ROLE_ADS_MANAGER, ROLE_ADS_MARKETING, ROLE_ADS_FIELD, ROLE_VIEWER_ADS]:
+        return SECTION_ADS
+    # fallback: use stored scope
+    return ""
+
 DEFAULT_PERMS = {
-    ROLE_SUPERADMIN: {"*": {"view": 1, "add": 1, "edit": 1, "delete": 1, "export": 1}},
-    ROLE_HEAD: {"*": {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 1}},
-    ROLE_INSTALL_MGR: {SECTION_INSTALL: {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 1}},
-    ROLE_ADS_MGR: {SECTION_ADS: {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 1}},
-    ROLE_INSTALL_FIELD: {SECTION_INSTALL: {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 0}},
-    ROLE_ADS_FIELD: {SECTION_ADS: {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 0}},
-    ROLE_VIEWER: {"*": {"view": 1, "add": 0, "edit": 0, "delete": 0, "export": 0}},
-    ROLE_EXECUTIVE: {"*": {"view": 1, "add": 0, "edit": 0, "delete": 0, "export": 1}},
+    # view/add/edit/delete/export/assign/approve
+    ROLE_SUPER_ADMIN: {"*": {"view": 1, "add": 1, "edit": 1, "delete": 1, "export": 1, "assign": 1, "approve": 1}},
+    ROLE_MARKETING_HEAD: {"*": {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 1, "assign": 1, "approve": 1}},
+
+    ROLE_INSTALLATION_MANAGER: {SECTION_INSTALL: {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 1, "assign": 1, "approve": 1}},
+    ROLE_INSTALLATION_MARKETING: {SECTION_INSTALL: {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 0, "assign": 0, "approve": 0}},
+    ROLE_INSTALLATION_FIELD: {SECTION_INSTALL: {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 0, "assign": 0, "approve": 0}},
+    ROLE_VIEWER_INSTALLATION: {SECTION_INSTALL: {"view": 1, "add": 0, "edit": 0, "delete": 0, "export": 0, "assign": 0, "approve": 0}},
+
+    ROLE_ADS_MANAGER: {SECTION_ADS: {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 1, "assign": 1, "approve": 1}},
+    ROLE_ADS_MARKETING: {SECTION_ADS: {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 0, "assign": 0, "approve": 0}},
+    ROLE_ADS_FIELD: {SECTION_ADS: {"view": 1, "add": 1, "edit": 1, "delete": 0, "export": 0, "assign": 0, "approve": 0}},
+    ROLE_VIEWER_ADS: {SECTION_ADS: {"view": 1, "add": 0, "edit": 0, "delete": 0, "export": 0, "assign": 0, "approve": 0}},
 }
+
+
+# ---------------------------------------------------------
+# Backward compatible constants used across the rest of file
+# (Do NOT remove; keeps existing UI/login code unchanged)
+# ---------------------------------------------------------
+ROLE_SUPERADMIN = ROLE_SUPER_ADMIN
+ROLE_HEAD = ROLE_MARKETING_HEAD
+ROLE_INSTALL_MGR = ROLE_INSTALLATION_MANAGER
+ROLE_ADS_MGR = ROLE_ADS_MANAGER
+ROLE_INSTALL_FIELD = ROLE_INSTALLATION_FIELD
+ROLE_ADS_FIELD = ROLE_ADS_FIELD
+ROLE_VIEWER = "VIEWER_LEGACY"  # resolved by canonical_role + scope
+ROLE_EXECUTIVE = ROLE_MARKETING_HEAD
 
 LEAD_STATUS = ["New", "Contacted", "Follow-up Required", "Interested", "Installed", "Active", "Rejected/Not Suitable"]
 CALL_OUTCOMES = ["Interested", "Follow-up", "Not Reachable", "Rejected"]
@@ -733,8 +807,21 @@ def insert_manual_lead(payload: dict) -> None:
     if not _safe_table("manual_leads"):
         st.error("manual_leads table not found. Run DB migration/init_db_once.")
         return
-    exec_sql(
-        """INSERT INTO manual_leads(
+
+    a = current_auth()
+    lead_id = payload.get("lead_id") or str(uuid.uuid4())
+    created_by = (payload.get("created_by") or a["user"] or "").strip()
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="add",
+        role=a["role"],
+        username=a["user"],
+        entity_table="manual_leads",
+        entity_id=str(lead_id),
+        entity_assigned_to=created_by,  # for assignee-restricted roles, must be self
+        operation="INSERT",
+        sql="""INSERT INTO manual_leads(
               lead_id, section, district, city, property_name, property_address,
               promoter_name, promoter_mobile, promoter_email, property_type, property_status,
               notes, created_by, created_at, updated_at
@@ -744,26 +831,29 @@ def insert_manual_lead(payload: dict) -> None:
               :promoter_name, :promoter_mobile, :promoter_email, :property_type, :property_status,
               :notes, :created_by, NOW(), NOW()
             )""",
-        {
-            "lead_id": payload.get("lead_id") or str(uuid.uuid4()),
-            "section": payload.get("section", "Both"),
-            "district": payload.get("district", ""),
-            "city": payload.get("city", ""),
-            "property_name": payload.get("property_name", ""),
-            "property_address": payload.get("property_address", ""),
-            "promoter_name": payload.get("promoter_name", ""),
-            "promoter_mobile": payload.get("promoter_mobile", ""),
-            "promoter_email": payload.get("promoter_email", ""),
-            "property_type": payload.get("property_type", ""),
-            "property_status": payload.get("property_status", ""),
-            "notes": payload.get("notes", ""),
-            "created_by": payload.get("created_by", ""),
+        params={
+            "lead_id": lead_id,
+            "section": payload.get("section") or SECTION,
+            "district": payload.get("district") or "",
+            "city": payload.get("city") or "",
+            "property_name": payload.get("property_name") or "",
+            "property_address": payload.get("property_address") or "",
+            "promoter_name": payload.get("promoter_name") or "",
+            "promoter_mobile": payload.get("promoter_mobile") or "",
+            "promoter_email": payload.get("promoter_email") or "",
+            "property_type": payload.get("property_type") or "",
+            "property_status": payload.get("property_status") or "",
+            "notes": payload.get("notes") or "",
+            "created_by": created_by,
         },
+        old_row_sql=None,
+        new_row_sql="SELECT * FROM manual_leads WHERE lead_id=:id",
+        new_row_params={"id": lead_id},
+        details=f"manual_lead created lead_id={lead_id}",
+        allow_assign=True,
     )
 
-# -----------------------------
-# INVENTORY + SCREENS
-# -----------------------------
+
 def list_inventory(limit: int = 500) -> pd.DataFrame:
     if not _safe_table("inventory_sites"):
         return _empty_df()
@@ -806,124 +896,136 @@ def update_inventory_screen_count(property_id: str) -> None:
         {"c": cnt, "pid": property_id},
     )
 
-def upsert_inventory(site: dict) -> None:
+def upsert_inventory(payload: dict, username: str | None = None) -> None:
     if not _safe_table("inventory_sites"):
         st.error("inventory_sites table not found. Run DB migration/init_db_once.")
         return
-    if not site.get("property_id"):
-        st.error("property_id is required for upsert_inventory().")
-        return
 
-    exec_sql(
-        """INSERT INTO inventory_sites(
-              property_id, property_code, district, city, property_name, property_address,
-              latitude, longitude, date_of_contract, contract_period, screen_installed_date,
-              contract_terms, site_rating, chairman_name, contact_person, contact_details,
-              agreed_rent_pm, notes, last_updated
-            )
-            VALUES(
-              :property_id, :property_code, :district, :city, :property_name, :property_address,
-              :latitude, :longitude, :date_of_contract, :contract_period, :screen_installed_date,
-              :contract_terms, :site_rating, :chairman_name, :contact_person, :contact_details,
-              :agreed_rent_pm, :notes, NOW()
-            )
-            ON CONFLICT(property_id) DO UPDATE SET
-              property_code = EXCLUDED.property_code,
-              district = EXCLUDED.district,
-              city = EXCLUDED.city,
-              property_name = EXCLUDED.property_name,
-              property_address = EXCLUDED.property_address,
-              latitude = EXCLUDED.latitude,
-              longitude = EXCLUDED.longitude,
-              date_of_contract = EXCLUDED.date_of_contract,
-              contract_period = EXCLUDED.contract_period,
-              screen_installed_date = EXCLUDED.screen_installed_date,
-              contract_terms = EXCLUDED.contract_terms,
-              site_rating = EXCLUDED.site_rating,
-              chairman_name = EXCLUDED.chairman_name,
-              contact_person = EXCLUDED.contact_person,
-              contact_details = EXCLUDED.contact_details,
-              agreed_rent_pm = EXCLUDED.agreed_rent_pm,
-              notes = EXCLUDED.notes,
-              last_updated = NOW()""",
-        {
-            "property_id": site["property_id"],
-            "property_code": site.get("property_code"),
-            "district": site.get("district", ""),
-            "city": site.get("city", ""),
-            "property_name": site.get("property_name", ""),
-            "property_address": site.get("property_address", ""),
-            "latitude": site.get("latitude"),
-            "longitude": site.get("longitude"),
-            "date_of_contract": site.get("date_of_contract", ""),
-            "contract_period": site.get("contract_period", ""),
-            "screen_installed_date": site.get("screen_installed_date", ""),
-            "contract_terms": site.get("contract_terms", ""),
-            "site_rating": site.get("site_rating"),
-            "chairman_name": site.get("chairman_name", ""),
-            "contact_person": site.get("contact_person", ""),
-            "contact_details": site.get("contact_details", ""),
-            "agreed_rent_pm": site.get("agreed_rent_pm"),
-            "notes": site.get("notes", ""),
+    a = current_auth()
+    user = username or a["user"]
+    property_id = payload.get("property_id") or str(uuid.uuid4())
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="edit",
+        role=a["role"],
+        username=user,
+        entity_table="inventory_sites",
+        entity_id=str(property_id),
+        entity_assigned_to=(payload.get("assigned_to") or user),  # if you later add assigned_to
+        operation="UPSERT",
+        sql="""INSERT INTO inventory_sites(property_id,property_code,district,city,property_name,property_address,latitude,longitude,contact_person,contact_details,agreed_rent_pm,site_rating,notes,last_updated)
+               VALUES(:property_id,:property_code,:district,:city,:property_name,:property_address,:latitude,:longitude,:contact_person,:contact_details,:agreed_rent_pm,:site_rating,:notes,NOW())
+               ON CONFLICT(property_id) DO UPDATE SET
+                 property_code=EXCLUDED.property_code,
+                 district=EXCLUDED.district,
+                 city=EXCLUDED.city,
+                 property_name=EXCLUDED.property_name,
+                 property_address=EXCLUDED.property_address,
+                 latitude=EXCLUDED.latitude,
+                 longitude=EXCLUDED.longitude,
+                 contact_person=EXCLUDED.contact_person,
+                 contact_details=EXCLUDED.contact_details,
+                 agreed_rent_pm=EXCLUDED.agreed_rent_pm,
+                 site_rating=EXCLUDED.site_rating,
+                 notes=EXCLUDED.notes,
+                 last_updated=NOW()""",
+        params={
+            "property_id": property_id,
+            "property_code": payload.get("property_code") or "",
+            "district": payload.get("district") or "",
+            "city": payload.get("city") or "",
+            "property_name": payload.get("property_name") or "",
+            "property_address": payload.get("property_address") or "",
+            "latitude": payload.get("latitude") or "",
+            "longitude": payload.get("longitude") or "",
+            "contact_person": payload.get("contact_person") or "",
+            "contact_details": payload.get("contact_details") or "",
+            "agreed_rent_pm": payload.get("agreed_rent_pm") or "",
+            "site_rating": payload.get("site_rating") or 3,
+            "notes": payload.get("notes") or "",
         },
+        old_row_sql="SELECT * FROM inventory_sites WHERE property_id=:id",
+        old_row_params={"id": property_id},
+        new_row_sql="SELECT * FROM inventory_sites WHERE property_id=:id",
+        new_row_params={"id": property_id},
+        details=f"inventory upsert property_id={property_id}",
+        allow_assign=True,
     )
 
-def upsert_screen(s: dict) -> None:
+
+def upsert_screen(payload: dict, username: str | None = None) -> None:
     if not _safe_table("screens"):
         st.error("screens table not found. Run DB migration/init_db_once.")
         return
-    if not s.get("screen_id") or not s.get("property_id"):
-        st.error("screen_id and property_id are required for upsert_screen().")
-        return
 
-    exec_sql(
-        """INSERT INTO screens(
-              screen_id, property_id, screen_location,
-              installed_date, installed_by, last_service_date, next_service_due,
-              is_active, last_updated
-            )
-            VALUES(
-              :screen_id, :property_id, :screen_location,
-              :installed_date, :installed_by, :last_service_date, :next_service_due,
-              :is_active, NOW()
-            )
+    a = current_auth()
+    user = username or a["user"]
+    sid = payload.get("screen_id") or str(uuid.uuid4())
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="edit",
+        role=a["role"],
+        username=user,
+        entity_table="screens",
+        entity_id=str(sid),
+        entity_assigned_to=(payload.get("assigned_to") or user),  # if you later add assigned_to
+        operation="UPSERT",
+        sql="""
+            INSERT INTO screens(screen_id, property_id, screen_location, installed_by, installed_date, last_service_date, next_service_due, is_active, last_updated)
+            VALUES(:sid,:pid,:loc,:by,:idate,:lsd,:nsd,:act,NOW())
             ON CONFLICT(screen_id) DO UPDATE SET
-              property_id = EXCLUDED.property_id,
-              screen_location = EXCLUDED.screen_location,
-              installed_date = EXCLUDED.installed_date,
-              installed_by = EXCLUDED.installed_by,
-              last_service_date = EXCLUDED.last_service_date,
-              next_service_due = EXCLUDED.next_service_due,
-              is_active = EXCLUDED.is_active,
-              last_updated = NOW()""",
-        {
-            "screen_id": s["screen_id"],
-            "property_id": s["property_id"],
-            "screen_location": s.get("screen_location", ""),
-            "installed_date": s.get("installed_date", ""),
-            "installed_by": s.get("installed_by", ""),
-            "last_service_date": s.get("last_service_date", ""),
-            "next_service_due": s.get("next_service_due", ""),
-            "is_active": int(s.get("is_active", 1) or 1),
+              property_id=EXCLUDED.property_id,
+              screen_location=EXCLUDED.screen_location,
+              installed_by=EXCLUDED.installed_by,
+              installed_date=EXCLUDED.installed_date,
+              last_service_date=EXCLUDED.last_service_date,
+              next_service_due=EXCLUDED.next_service_due,
+              is_active=EXCLUDED.is_active,
+              last_updated=NOW()
+        """,
+        params={
+            "sid": sid,
+            "pid": payload.get("property_id"),
+            "loc": payload.get("screen_location") or "",
+            "by": payload.get("installed_by") or user,
+            "idate": payload.get("installed_date") or "",
+            "lsd": payload.get("last_service_date") or "",
+            "nsd": payload.get("next_service_due") or "",
+            "act": 1 if int(payload.get("is_active", 1) or 1) else 0,
         },
-    )
-    update_inventory_screen_count(s["property_id"])
-
-def mark_serviced(screen_id: str, last_service_date: str, next_due_date: str) -> None:
-    if not _safe_table("screens"):
-        return
-    exec_sql(
-        """UPDATE screens
-           SET last_service_date = :ls,
-               next_service_due = :nd,
-               last_updated = NOW()
-           WHERE screen_id = :sid""",
-        {"ls": str(last_service_date), "nd": str(next_due_date), "sid": screen_id},
+        old_row_sql="SELECT * FROM screens WHERE screen_id=:id",
+        old_row_params={"id": sid},
+        new_row_sql="SELECT * FROM screens WHERE screen_id=:id",
+        new_row_params={"id": sid},
+        details=f"screen upsert screen_id={sid}",
+        allow_assign=True,
     )
 
-# -----------------------------
-# AGREEMENTS + PAYMENTS
-# -----------------------------
+
+def mark_serviced(screen_id: str, last_service_date: str, next_service_due: str, by_user: str, section: str):
+    a = current_auth()
+    audited_write(
+        section=section,
+        action="edit",
+        role=a["role"],
+        username=a["user"],
+        entity_table="screens",
+        entity_id=str(screen_id),
+        entity_assigned_to=(by_user or a["user"]),
+        operation="UPDATE",
+        sql="UPDATE screens SET last_service_date=:ls, next_service_due=:nd, last_updated=NOW() WHERE screen_id=:sid",
+        params={"ls": last_service_date, "nd": next_service_due, "sid": screen_id},
+        old_row_sql="SELECT * FROM screens WHERE screen_id=:sid",
+        old_row_params={"sid": screen_id},
+        new_row_sql="SELECT * FROM screens WHERE screen_id=:sid",
+        new_row_params={"sid": screen_id},
+        details=f"mark_serviced screen_id={screen_id}",
+        allow_assign=True,
+    )
+
+
 def list_agreements(property_id: str | None = None, limit: int = 500) -> pd.DataFrame:
     if not _safe_table("agreements"):
         return _empty_df()
@@ -938,77 +1040,90 @@ def list_agreements(property_id: str | None = None, limit: int = 500) -> pd.Data
         )
     return qdf(f"SELECT * FROM agreements ORDER BY updated_at DESC LIMIT {int(limit)}")
 
-def add_agreement(a: dict) -> None:
+def add_agreement(payload: dict, username: str | None = None):
     if not _safe_table("agreements"):
         st.error("agreements table not found. Run DB migration/init_db_once.")
         return
-    exec_sql(
-        """INSERT INTO agreements(
-              agreement_id, section, property_id, property_code, party_name,
-              start_date, end_date, renewal_type, rent_pm, billing_cycle,
-              status, notes, created_by, created_at, updated_at
-            )
-            VALUES(
-              :agreement_id, :section, :property_id, :property_code, :party_name,
-              :start_date, :end_date, :renewal_type, :rent_pm, :billing_cycle,
-              :status, :notes, :created_by, NOW(), NOW()
-            )""",
-        {
-            "agreement_id": a.get("agreement_id") or str(uuid.uuid4()),
-            "section": a.get("section", "Both"),
-            "property_id": a.get("property_id"),
-            "property_code": a.get("property_code"),
-            "party_name": a.get("party_name", ""),
-            "start_date": a.get("start_date", ""),
-            "end_date": a.get("end_date", ""),
-            "renewal_type": a.get("renewal_type", ""),
-            "rent_pm": a.get("rent_pm"),
-            "billing_cycle": a.get("billing_cycle", ""),
-            "status": a.get("status", ""),
-            "notes": a.get("notes", ""),
-            "created_by": a.get("created_by", ""),
+    a = current_auth()
+    user = username or a["user"]
+    agid = payload.get("agreement_id") or str(uuid.uuid4())
+    created_by = (payload.get("created_by") or user or "").strip()
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="add",
+        role=a["role"],
+        username=user,
+        entity_table="agreements",
+        entity_id=str(agid),
+        entity_assigned_to=created_by,
+        operation="INSERT",
+        sql="""INSERT INTO agreements(agreement_id,record_hash,section,agreement_no,agreement_date,party_name,amount,status,notes,created_by,created_at)
+               VALUES(:id,:h,:s,:no,:dt,:party,:amt,:st,:n,:by,NOW())""",
+        params={
+            "id": agid,
+            "h": payload.get("record_hash"),
+            "s": payload.get("section") or SECTION,
+            "no": payload.get("agreement_no") or "",
+            "dt": payload.get("agreement_date") or "",
+            "party": payload.get("party_name") or "",
+            "amt": payload.get("amount") or "",
+            "st": payload.get("status") or "Draft",
+            "n": payload.get("notes") or "",
+            "by": created_by,
         },
+        old_row_sql=None,
+        new_row_sql="SELECT * FROM agreements WHERE agreement_id=:id",
+        new_row_params={"id": agid},
+        details=f"agreement created agreement_id={agid}",
+        allow_assign=True,
     )
+
 
 def list_payments(limit: int = 800) -> pd.DataFrame:
     if not _safe_table("payments"):
         return _empty_df()
     return qdf(f"SELECT * FROM payments ORDER BY created_at DESC LIMIT {int(limit)}")
 
-def add_payment(p: dict) -> None:
+def add_payment(payload: dict, username: str | None = None):
     if not _safe_table("payments"):
         st.error("payments table not found. Run DB migration/init_db_once.")
         return
-    exec_sql(
-        """INSERT INTO payments(
-              payment_id, agreement_id, section, property_id,
-              due_date, amount, status, paid_date,
-              payment_mode, reference_no, notes, created_by, created_at
-            )
-            VALUES(
-              :payment_id, :agreement_id, :section, :property_id,
-              :due_date, :amount, :status, :paid_date,
-              :payment_mode, :reference_no, :notes, :created_by, NOW()
-            )""",
-        {
-            "payment_id": p.get("payment_id") or str(uuid.uuid4()),
-            "agreement_id": p.get("agreement_id"),
-            "section": p.get("section", "Both"),
-            "property_id": p.get("property_id"),
-            "due_date": p.get("due_date", ""),
-            "amount": p.get("amount"),
-            "status": p.get("status", "Due"),
-            "paid_date": p.get("paid_date", ""),
-            "payment_mode": p.get("payment_mode", ""),
-            "reference_no": p.get("reference_no", ""),
-            "notes": p.get("notes", ""),
-            "created_by": p.get("created_by", ""),
+    a = current_auth()
+    user = username or a["user"]
+    pid = payload.get("payment_id") or str(uuid.uuid4())
+    created_by = (payload.get("created_by") or user or "").strip()
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="add",
+        role=a["role"],
+        username=user,
+        entity_table="payments",
+        entity_id=str(pid),
+        entity_assigned_to=created_by,
+        operation="INSERT",
+        sql="""INSERT INTO payments(payment_id,record_hash,section,payment_date,amount,mode,reference_no,notes,created_by,created_at)
+               VALUES(:id,:h,:s,:dt,:amt,:m,:ref,:n,:by,NOW())""",
+        params={
+            "id": pid,
+            "h": payload.get("record_hash"),
+            "s": payload.get("section") or SECTION,
+            "dt": payload.get("payment_date") or "",
+            "amt": payload.get("amount") or "",
+            "m": payload.get("mode") or "",
+            "ref": payload.get("reference_no") or "",
+            "n": payload.get("notes") or "",
+            "by": created_by,
         },
+        old_row_sql=None,
+        new_row_sql="SELECT * FROM payments WHERE payment_id=:id",
+        new_row_params={"id": pid},
+        details=f"payment created payment_id={pid}",
+        allow_assign=True,
     )
 
-# -----------------------------
-# DOCUMENTS VAULT
-# -----------------------------
+
 def list_documents(property_id: str | None = None, limit: int = 800) -> pd.DataFrame:
     if not _safe_table("documents_vault"):
         return _empty_df()
@@ -1023,33 +1138,43 @@ def list_documents(property_id: str | None = None, limit: int = 800) -> pd.DataF
         )
     return qdf(f"SELECT * FROM documents_vault ORDER BY uploaded_at DESC LIMIT {int(limit)}")
 
-def add_document(row: dict) -> None:
+def add_document(payload: dict, username: str | None = None):
     if not _safe_table("documents_vault"):
         st.error("documents_vault table not found. Run DB migration/init_db_once.")
         return
-    exec_sql(
-        """INSERT INTO documents_vault(
-              doc_id, section, property_id, doc_type,
-              filename, storage_path, issue_date, expiry_date,
-              uploaded_by, uploaded_at
-            )
-            VALUES(
-              :doc_id, :section, :property_id, :doc_type,
-              :filename, :storage_path, :issue_date, :expiry_date,
-              :uploaded_by, NOW()
-            )""",
-        {
-            "doc_id": row.get("doc_id") or str(uuid.uuid4()),
-            "section": row.get("section", "Both"),
-            "property_id": row.get("property_id"),
-            "doc_type": row.get("doc_type", "Other"),
-            "filename": row.get("filename", ""),
-            "storage_path": row.get("storage_path", ""),
-            "issue_date": row.get("issue_date", ""),
-            "expiry_date": row.get("expiry_date", ""),
-            "uploaded_by": row.get("uploaded_by", ""),
+    a = current_auth()
+    user = username or a["user"]
+    doc_id = payload.get("doc_id") or str(uuid.uuid4())
+    created_by = (payload.get("uploaded_by") or payload.get("created_by") or user or "").strip()
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="add",
+        role=a["role"],
+        username=user,
+        entity_table="documents_vault",
+        entity_id=str(doc_id),
+        entity_assigned_to=created_by,
+        operation="INSERT",
+        sql="""INSERT INTO documents_vault(doc_id,record_hash,section,doc_type,doc_title,file_url,uploaded_by,uploaded_at,notes)
+               VALUES(:id,:h,:s,:t,:ttl,:url,:by,NOW(),:n)""",
+        params={
+            "id": doc_id,
+            "h": payload.get("record_hash"),
+            "s": payload.get("section") or SECTION,
+            "t": payload.get("doc_type") or "",
+            "ttl": payload.get("doc_title") or "",
+            "url": payload.get("file_url") or "",
+            "by": created_by,
+            "n": payload.get("notes") or "",
         },
+        old_row_sql=None,
+        new_row_sql="SELECT * FROM documents_vault WHERE doc_id=:id",
+        new_row_params={"id": doc_id},
+        details=f"document uploaded doc_id={doc_id}",
+        allow_assign=True,
     )
+
 
 def prop_status(property_id: str) -> str:
     """Best-effort availability helper (adjust statuses as per your agreements)."""
@@ -1087,11 +1212,77 @@ def pbkdf2_verify(password: str, stored: str) -> bool:
         return False
 
 
-def audit(user: str, action: str, details: str = ""):
+def _json_safe(obj):
+    try:
+        import json as _json
+        return _json.dumps(obj, ensure_ascii=False, default=str)
+    except Exception:
+        return str(obj)
+
+
+def audit(
+    user: str,
+    action: str,
+    details: str = "",
+    *,
+    entity_table: str | None = None,
+    entity_id: str | None = None,
+    operation: str | None = None,
+    old_data: dict | None = None,
+    new_data: dict | None = None,
+    changed_fields: list[str] | None = None,
+):
+    """Backward compatible audit logger.
+
+    Old calls: audit(username, action_type, details)
+
+    New extended fields are inserted if the columns exist; otherwise it falls back to
+    the legacy (log_id, username, action_type, details) insert.
+    """
+    log_id = str(uuid.uuid4())
+    u = (user or "").strip() or None
+
+    # Prefer extended insert if columns exist
+    try:
+        has_entity_table = column_exists("audit_logs", "entity_table")
+        has_entity_id = column_exists("audit_logs", "entity_id")
+        has_operation = column_exists("audit_logs", "operation")
+        has_old = column_exists("audit_logs", "old_data")
+        has_new = column_exists("audit_logs", "new_data")
+        has_changed = column_exists("audit_logs", "changed_fields")
+
+        if has_entity_table or has_entity_id or has_operation or has_old or has_new or has_changed:
+            cols = ["log_id", "username", "action_type", "details"]
+            vals = [":id", ":u", ":a", ":d"]
+            params = {"id": log_id, "u": u, "a": action, "d": details or ""}
+
+            if has_entity_table:
+                cols.append("entity_table"); vals.append(":et"); params["et"] = entity_table
+            if has_entity_id:
+                cols.append("entity_id"); vals.append(":eid"); params["eid"] = entity_id
+            if has_operation:
+                cols.append("operation"); vals.append(":op"); params["op"] = operation
+            if has_old:
+                cols.append("old_data"); vals.append("CAST(:od AS jsonb)"); params["od"] = _json_safe(old_data or None)
+            if has_new:
+                cols.append("new_data"); vals.append("CAST(:nd AS jsonb)"); params["nd"] = _json_safe(new_data or None)
+            if has_changed:
+                cols.append("changed_fields"); vals.append("CAST(:cf AS jsonb)"); params["cf"] = _json_safe(changed_fields or None)
+
+            sql = f"INSERT INTO audit_logs({', '.join(cols)}) VALUES({', '.join(vals)})"
+            exec_sql(sql, params)
+            return
+
+    except Exception:
+        # If any of the feature-detection fails, just fall back to legacy insert.
+        pass
+
+    # Legacy insert (always works with your current schema)
     exec_sql(
         "INSERT INTO audit_logs(log_id,username,action_type,details) VALUES(:id,:u,:a,:d)",
-        {"id": str(uuid.uuid4()), "u": user, "a": action, "d": details},
+        {"id": log_id, "u": u, "a": action, "d": details or ""},
     )
+
 
 
 def get_user(username: str):
@@ -1105,19 +1296,43 @@ def set_last_login(username: str):
 
 @st.cache_data(show_spinner=False, ttl=120)
 def load_permissions():
-    return qdf("SELECT role, section, can_view, can_add, can_edit, can_delete, can_export FROM permissions")
+    # Backward compatible: permissions table may not have can_assign/can_approve yet.
+    cols = ["role","section","can_view","can_add","can_edit","can_delete","can_export"]
+    extra = []
+    if column_exists("permissions", "can_assign"):
+        extra.append("can_assign")
+    if column_exists("permissions", "can_approve"):
+        extra.append("can_approve")
+    sel = ", ".join(cols + extra)
+    return qdf(f"SELECT {sel} FROM permissions")
+
+
+def _perm_val(row: dict, action: str) -> int:
+    return int(row.get(f"can_{action}", 0) or 0)
 
 
 def can(section: str, action: str, role: str) -> bool:
-    if role == ROLE_SUPERADMIN:
+    # Canonicalize role names (supports legacy role values)
+    r = canonical_role(role, section_scope=st.session_state.get("auth", {}).get("scope"))
+    if r == ROLE_SUPER_ADMIN:
         return True
+
     perms = load_permissions()
-    sub = perms[(perms["role"] == role) & (perms["section"].isin([section, "*"]))]
+    if perms is None or len(perms) == 0:
+        # safe default: view-only
+        return action == "view"
+
+    # Canonicalize roles inside permissions table too
+    perms = perms.copy()
+    perms["__role"] = perms["role"].astype("string").apply(lambda x: canonical_role(str(x or "")))
+    sub = perms[(perms["__role"] == r) & (perms["section"].isin([section, "*"]))]
+
     if len(sub) == 0:
         return action == "view"
+
     spec = sub[sub["section"] == section]
     row = (spec.iloc[0] if len(spec) else sub.iloc[0]).to_dict()
-    return bool(row.get(f"can_{action}", 0))
+    return bool(_perm_val(row, action))
 
 
 def page_title(title: str, subtitle: str):
@@ -1184,8 +1399,204 @@ def require_auth():
 require_auth()
 AUTH = st.session_state["auth"]
 USER = AUTH["user"]
-ROLE = AUTH["role"]
+ROLE = canonical_role(AUTH["role"], AUTH.get("scope"))
 SCOPE = AUTH.get("scope", SCOPE_BOTH)
+
+# =========================================================
+# CENTRAL ACCESS CONTROL (Scope + Role + Assignment)
+# =========================================================
+MANAGER_ROLES = {
+    ROLE_SUPER_ADMIN, ROLE_MARKETING_HEAD,
+    ROLE_INSTALLATION_MANAGER, ROLE_ADS_MANAGER,
+}
+ASSIGNEE_RESTRICTED_ROLES = {
+    ROLE_INSTALLATION_MARKETING, ROLE_INSTALLATION_FIELD,
+    ROLE_ADS_MARKETING, ROLE_ADS_FIELD,
+}
+VIEWER_ROLES = {ROLE_VIEWER_INSTALLATION, ROLE_VIEWER_ADS}
+
+def current_auth():
+    a = st.session_state.get("auth") or {}
+    # canonicalize role each time (supports legacy values)
+    role = canonical_role(a.get("role",""), a.get("scope"))
+    scope = a.get("scope") or role_default_scope(role) or SCOPE_BOTH
+    return {"user": a.get("user"), "role": role, "scope": scope}
+
+def module_allowed(scope: str, section: str) -> bool:
+    sc = (scope or "").strip()
+    if sc == SCOPE_BOTH:
+        return True
+    return sc == section
+
+def require_module_access(section: str):
+    a = current_auth()
+    # Enforce that only SUPER_ADMIN / MARKETING_HEAD can actually have Both scope
+    if a["role"] not in [ROLE_SUPER_ADMIN, ROLE_MARKETING_HEAD] and a["scope"] == SCOPE_BOTH:
+        a["scope"] = role_default_scope(a["role"]) or SECTION_INSTALL
+        st.session_state["auth"]["scope"] = a["scope"]
+
+    if not module_allowed(a["scope"], section):
+        st.error("Access Denied")
+        st.stop()
+
+def can_action(
+    section: str,
+    action: str,
+    role: str,
+    username: str,
+    entity_assigned_to: str | None = None,
+    allow_assign: bool = False,
+) -> bool:
+    # 1) module scope guard
+    scope = current_auth().get("scope")
+    if not module_allowed(scope, section):
+        return False
+
+    r = canonical_role(role, scope)
+    # 2) Viewer always read-only
+    if r in VIEWER_ROLES:
+        return action == "view"
+
+    # 3) permission matrix (existing permissions table via can())
+    # Map high-level actions to existing permission columns where possible
+    if action in ["assign", "approve"]:
+        # prefer permissions table columns if present; otherwise fall back to DEFAULT_PERMS
+        if column_exists("permissions", f"can_{action}"):
+            if not can(section, action, r):
+                return False
+        else:
+            rule = DEFAULT_PERMS.get(r, {}).get(section) or DEFAULT_PERMS.get(r, {}).get("*", {})
+            if int(rule.get(action, 0) or 0) != 1:
+                return False
+    else:
+        if not can(section, action, r):
+            return False
+
+    # 4) assignment rule for restricted roles
+    if r in ASSIGNEE_RESTRICTED_ROLES and action in ["add", "edit", "delete", "assign", "approve"]:
+        # For create: entity_assigned_to must be self
+        if entity_assigned_to is None:
+            return False
+        if str(entity_assigned_to or "").strip() != str(username or "").strip():
+            return False
+
+    # 5) assigning requires explicit permission (or allow_assign by manager pages)
+    if action == "assign" and not allow_assign:
+        return False
+
+    return True
+
+def _diff_fields(old: dict | None, new: dict | None) -> list[str]:
+    if not old and not new:
+        return []
+    old = old or {}
+    new = new or {}
+    keys = set(old.keys()) | set(new.keys())
+    out = []
+    for k in keys:
+        if str(old.get(k)) != str(new.get(k)):
+            out.append(k)
+    return sorted(out)
+
+def _fetch_one(sql: str, params: dict) -> dict | None:
+    df = qdf(sql, params)
+    return df.iloc[0].to_dict() if df is not None and len(df) else None
+
+def audited_write(
+    *,
+    section: str,
+    action: str,
+    role: str,
+    username: str,
+    entity_table: str,
+    entity_id: str | None,
+    entity_assigned_to: str | None,
+    operation: str,
+    sql: str,
+    params: dict,
+    old_row_sql: str | None = None,
+    old_row_params: dict | None = None,
+    new_row_sql: str | None = None,
+    new_row_params: dict | None = None,
+    details: str = "",
+    allow_assign: bool = False,
+):
+    if not can_action(section, action, role, username, entity_assigned_to=entity_assigned_to, allow_assign=allow_assign):
+        st.error("Access denied (permission / scope / assignment rule).")
+        st.stop()
+
+    old_data = _fetch_one(old_row_sql, old_row_params or {}) if old_row_sql else None
+    exec_sql(sql, params)
+    new_data = _fetch_one(new_row_sql, new_row_params or {}) if new_row_sql else None
+    changed = _diff_fields(old_data, new_data)
+    audit(username, action.upper(), details, entity_table=entity_table, entity_id=entity_id, operation=operation,
+          old_data=old_data, new_data=new_data, changed_fields=changed)
+
+def create_task(*, record_hash: str | None, section: str, title: str, task_type: str, priority: str, status: str,
+                assigned_to: str, due_date: str, created_by: str, notes: str):
+    a = current_auth()
+    tid = str(uuid.uuid4())
+    # assignment rule: restricted roles can only create tasks assigned to themselves
+    entity_assignee = assigned_to or created_by
+    audited_write(
+        section=section,
+        action="add",
+        role=a["role"],
+        username=created_by,
+        entity_table="tasks",
+        entity_id=tid,
+        entity_assigned_to=entity_assignee,
+        operation="INSERT",
+        sql="""INSERT INTO tasks(id,record_hash,section,title,task_type,priority,status,assigned_to,due_date,created_by,notes)
+                 VALUES(:id,:h,:s,:t,:tt,:p,:st,:a,:d,:by,:n)""",
+        params={
+            "id": tid, "h": record_hash, "s": section, "t": title or "Task", "tt": task_type,
+            "p": priority, "st": status, "a": assigned_to, "d": due_date, "by": created_by, "n": notes or ""
+        },
+        old_row_sql=None,
+        new_row_sql="SELECT * FROM tasks WHERE id=:id",
+        new_row_params={"id": tid},
+        details=f"task created title={title}",
+        allow_assign=True,
+    )
+    return tid
+
+def create_interaction(*, record_hash: str, section: str, mode: str, remarks: str, next_follow_up_date: str | None,
+                       created_by: str, attachment_url: str | None):
+    a = current_auth()
+    iid = str(uuid.uuid4())
+
+    # For restricted roles: user must be assigned_to on that lead
+    if a["role"] in ASSIGNEE_RESTRICTED_ROLES:
+        lu = _fetch_one("SELECT assigned_to FROM lead_updates WHERE record_hash=:h AND section=:s", {"h": record_hash, "s": section})
+        if not lu or str(lu.get("assigned_to") or "") != str(created_by):
+            st.error("Access denied (interaction allowed only for your assigned leads).")
+            st.stop()
+
+    audited_write(
+        section=section,
+        action="add",
+        role=a["role"],
+        username=created_by,
+        entity_table="interactions",
+        entity_id=iid,
+        entity_assigned_to=created_by,
+        operation="INSERT",
+        sql="""INSERT INTO interactions(id,record_hash,section,mode,remarks,next_follow_up_date,created_by,attachment_url,assigned_to)
+                 VALUES(:id,:h,:s,:m,:r,:n,:by,:a,:as)""",
+        params={
+            "id": iid, "h": record_hash, "s": section, "m": mode, "r": remarks,
+            "n": next_follow_up_date, "by": created_by, "a": attachment_url, "as": created_by
+        },
+        old_row_sql=None,
+        new_row_sql="SELECT * FROM interactions WHERE id=:id",
+        new_row_params={"id": iid},
+        details="interaction created",
+        allow_assign=True,
+    )
+    return iid
+
+
 
 
 # =========================================================
@@ -1594,63 +2005,64 @@ def list_lead_updates(section: str) -> pd.DataFrame:
 
 def upsert_lead_update(section, record_hash, status, assigned_to, lead_source, notes, follow_up, last_call_outcome=None, username: str | None = None):
     """Upsert lead update and also write status history + audit log safely."""
-    username = username or "system"
+    a = current_auth()
+    username = username or a["user"] or "system"
+    role = a["role"]
+
+    # Enforce write permissions + assignment rule
+    if not can_action(section, "edit", role, username, entity_assigned_to=(assigned_to or "")):
+        st.error("Access denied (cannot edit this lead).")
+        st.stop()
+
     # Fetch old values for audit + status history
-    old = qdf(
-        "SELECT status, assigned_to, notes, follow_up FROM lead_updates WHERE record_hash=:h AND section=:s",
+    old_row = _fetch_one(
+        "SELECT * FROM lead_updates WHERE record_hash=:h AND section=:s",
         {"h": record_hash, "s": section},
     )
-    old_status = old.iloc[0]["status"] if len(old) else None
+    old_status = (old_row or {}).get("status")
 
+    # Upsert
     exec_sql(
         """
         INSERT INTO lead_updates(record_hash,section,status,assigned_to,lead_source,notes,follow_up,last_call_outcome,last_call_at,last_updated)
-        VALUES(:h,:s,:st,:as,:src,:n,:fu,:out,CASE WHEN :out IS NULL THEN NULL ELSE NOW() END,NOW())
-        ON CONFLICT(record_hash, section) DO UPDATE SET
+        VALUES(:h,:s,:st,:a,:src,:n,:fu,:out,CASE WHEN :out IS NULL OR :out='' THEN NULL ELSE NOW() END,NOW())
+        ON CONFLICT(record_hash,section) DO UPDATE SET
           status=EXCLUDED.status,
           assigned_to=EXCLUDED.assigned_to,
           lead_source=EXCLUDED.lead_source,
           notes=EXCLUDED.notes,
           follow_up=EXCLUDED.follow_up,
-          last_call_outcome=COALESCE(EXCLUDED.last_call_outcome, lead_updates.last_call_outcome),
-          last_call_at=CASE WHEN EXCLUDED.last_call_outcome IS NULL THEN lead_updates.last_call_at ELSE NOW() END,
+          last_call_outcome=EXCLUDED.last_call_outcome,
+          last_call_at=CASE
+              WHEN EXCLUDED.last_call_outcome IS NULL OR EXCLUDED.last_call_outcome='' THEN lead_updates.last_call_at
+              ELSE NOW()
+          END,
           last_updated=NOW()
         """,
-        {"h": record_hash, "s": section, "st": status, "as": assigned_to, "src": lead_source, "n": notes, "fu": follow_up, "out": last_call_outcome},
+        {"h": record_hash, "s": section, "st": status, "a": assigned_to, "src": lead_source, "n": notes, "fu": follow_up, "out": last_call_outcome},
     )
 
-    # Status history
-    try:
-        if old_status != status and table_exists("lead_status_history"):
-            exec_sql(
-                """INSERT INTO lead_status_history(id,record_hash,section,status_from,status_to,changed_by,note)
-                    VALUES(:id,:h,:s,:f,:t,:by,:note)""",
-                {
-                    "id": str(uuid.uuid4()),
-                    "h": record_hash,
-                    "s": section,
-                    "f": old_status,
-                    "t": status,
-                    "by": username,
-                    "note": "",
-                },
-            )
-    except Exception:
-        pass
+    # Status history (only if changed)
+    if old_status != status and _safe_table("lead_status_history"):
+        exec_sql(
+            """INSERT INTO lead_status_history(id,record_hash,section,old_status,new_status,changed_by,changed_at)
+               VALUES(:id,:h,:s,:o,:n,:by,NOW())""",
+            {"id": str(uuid.uuid4()), "h": record_hash, "s": section, "o": old_status, "n": status, "by": username},
+        )
 
-    # Audit trail (old/new snapshot)
-    try:
-        audit(username, "LEAD_UPSERT", f"section={section} record={record_hash} status:{old_status}->{status} assigned_to={assigned_to}")
-    except Exception:
-        pass
+    new_row = _fetch_one(
+        "SELECT * FROM lead_updates WHERE record_hash=:h AND section=:s",
+        {"h": record_hash, "s": section},
+    )
+    changed = _diff_fields(old_row, new_row)
 
-    list_lead_updates.clear()
+    audit(username, "LEAD_UPDATE", f"section={section} record_hash={record_hash} status={status}",
+          entity_table="lead_updates", entity_id=str(record_hash), operation="UPSERT",
+          old_data=old_row, new_data=new_row, changed_fields=changed)
+
+    return
 
 
-# =========================================================
-# SETTINGS / PROFILES
-# =========================================================
-@st.cache_data(show_spinner=False, ttl=60)
 def get_company_settings():
     df = qdf("SELECT * FROM company_settings LIMIT 1")
     if len(df) == 0:
@@ -1660,20 +2072,27 @@ def get_company_settings():
     return df.iloc[0].to_dict()
 
 
-def upsert_company_settings(gst_no: str, bank_details: str, limit_per_hour: int):
-    cur = get_company_settings()
+def upsert_company_settings(gst_no: str, bank_details: str, whatsapp_limit_per_hour: int, username: str | None = None):
+    a = current_auth()
+    user = username or a["user"]
+    # treat this as admin-like edit; require edit permission and managers only
+    if a["role"] not in [ROLE_SUPER_ADMIN, ROLE_MARKETING_HEAD]:
+        st.error("Access denied.")
+        st.stop()
+
+    old = _fetch_one("SELECT * FROM company_settings LIMIT 1", {})
     exec_sql(
-        """
-        UPDATE company_settings
-        SET gst_no=:g, bank_details=:b, whatsapp_limit_per_hour=:l, updated_at=NOW()
-        WHERE settings_id=:id
-        """,
-        {"g": gst_no, "b": bank_details, "l": int(limit_per_hour), "id": cur["settings_id"]},
+        """UPDATE company_settings
+           SET gst_no=:g, bank_details=:b, whatsapp_limit_per_hour=:w, updated_at=NOW()
+           WHERE settings_id=(SELECT settings_id FROM company_settings LIMIT 1)""",
+        {"g": gst_no or "", "b": bank_details or "", "w": int(whatsapp_limit_per_hour or 50)},
     )
-    get_company_settings.clear()
+    new = _fetch_one("SELECT * FROM company_settings LIMIT 1", {})
+    audit(user, "COMPANY_SETTINGS_UPDATE", "updated company settings",
+          entity_table="company_settings", entity_id=str((new or old or {}).get("settings_id") or ""),
+          operation="UPDATE", old_data=old, new_data=new, changed_fields=_diff_fields(old, new))
 
 
-@st.cache_data(show_spinner=False, ttl=120)
 def get_user_profile(username: str):
     df = qdf("SELECT * FROM user_profiles WHERE username=:u", {"u": username})
     if len(df) == 0:
@@ -1682,14 +2101,21 @@ def get_user_profile(username: str):
     return df.iloc[0].to_dict()
 
 
-def update_user_signature(username: str, filename: str):
-    exec_sql("UPDATE user_profiles SET signature_filename=:f, updated_at=NOW() WHERE username=:u", {"u": username, "f": filename})
-    get_user_profile.clear()
+def update_user_signature(username: str, file_name: str):
+    a = current_auth()
+    # allow user to update own profile; admin can update any
+    if a["user"] != username and a["role"] != ROLE_SUPER_ADMIN:
+        st.error("Access denied.")
+        st.stop()
+
+    old = _fetch_one("SELECT * FROM user_profiles WHERE username=:u", {"u": username})
+    exec_sql("UPDATE user_profiles SET signature_filename=:f, updated_at=NOW() WHERE username=:u", {"u": username, "f": file_name})
+    new = _fetch_one("SELECT * FROM user_profiles WHERE username=:u", {"u": username})
+    audit(a["user"], "USER_PROFILE_UPDATE", f"signature updated for {username}",
+          entity_table="user_profiles", entity_id=username, operation="UPDATE",
+          old_data=old, new_data=new, changed_fields=_diff_fields(old, new))
 
 
-# =========================================================
-# PDF PROPOSAL (Reportlab)
-# =========================================================
 def next_proposal_no():
     df = qdf("SELECT MAX(proposal_no) AS m FROM proposals")
     m = df.iloc[0]["m"]
@@ -1782,147 +2208,41 @@ def make_proposal_pdf_bytes(section: str, data: dict, settings: dict, signer: di
     return buffer.getvalue()
 
 
-def save_proposal_pdf(section: str, property_id: str, pdf_bytes: bytes, created_by: str) -> dict:
-    pno = next_proposal_no()
-    fname = f"proposal_{section.lower()}_{pno}_{uuid.uuid4().hex}.pdf"
-    path = os.path.join(UPLOAD_INSTALL, fname)
-    with open(path, "wb") as f:
-        f.write(pdf_bytes)
+def save_proposal_pdf(record_hash: str, section: str, file_name: str, file_bytes: bytes, created_by: str):
+    if not _safe_table("proposals"):
+        st.error("proposals table not found. Run DB migration/init_db_once.")
+        return
 
-    exec_sql(
-        """
-        INSERT INTO proposals(proposal_id, section, property_id, proposal_no, created_by, pdf_filename, status)
-        VALUES(:id,:sec,:pid,:pno,:by,:fn,'Generated')
-        """,
-        {"id": str(uuid.uuid4()), "sec": section, "pid": property_id, "pno": int(pno), "by": created_by, "fn": fname},
-    )
-    return {"proposal_no": pno, "filename": fname, "path": path}
-
-
-# =========================================================
-# SIDEBAR NAV + USER HELP
-# =========================================================
-from pathlib import Path
-import re
-
-# Menus
-MENU_INSTALL = [
-    "🏠 Home", "📈 Management Dashboard", "🎯 Installation Opportunities",
-    "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "🗂 Inventory (Sites)", "🖥 Screens",
-    "🛠 Service Center", "📢 Ad Sales Inventory", "📝 Agreements",
-    "💰 Billing & Reminders", "📄 Documents Vault", "🗺 Map View",
-    "📃 Proposals", "💬 WhatsApp", "📊 Reports"
-]
-
-MENU_ADS = [
-    "🏠 Home", "📈 Management Dashboard", "💼 Ads Opportunities",
-    "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "📢 Ad Sales Inventory",
-    "📝 Agreements", "💰 Billing & Reminders", "💬 WhatsApp", "📊 Reports"
-]
-
-with st.sidebar:
-    if Path(LOGO_PATH).exists():
-        st.image(LOGO_PATH, use_column_width=True)
-
-    st.markdown("### The Adbook AIAMS")
-    st.caption("Outdoor Media Operations System")
-    st.markdown("---")
-
-    st.markdown("**Quick Instructions**")
-    st.caption(
-        "• Use Home for fast search\n"
-        "• Use Leads to update status\n"
-        "• Use Inventory/Screens/Documents for Installation\n"
-        "• Use WhatsApp for click-to-chat"
-    )
-    st.markdown("---")
-
-    st.markdown("### AIAMS")
-    st.markdown(f"**User:** {USER}")
-    st.markdown(f"**Role:** {ROLE_LABEL.get(ROLE, ROLE)}")
-    st.markdown("---")
-
-    data_mode = st.radio("Data Source", ["Bundled (CSV)", "Upload Excel/CSV"], index=0)
-    upload = None
-    if data_mode == "Upload Excel/CSV":
-        upload = st.file_uploader("Upload file", type=["csv", "xlsx", "xls"])
-        if not upload:
+    a = current_auth()
+    created_by = created_by or a["user"]
+    # For assignee-restricted roles: must be assigned_to self on that lead
+    if a["role"] in ASSIGNEE_RESTRICTED_ROLES:
+        lu = _fetch_one("SELECT assigned_to FROM lead_updates WHERE record_hash=:h AND section=:s", {"h": record_hash, "s": section})
+        if not lu or str(lu.get("assigned_to") or "") != str(created_by):
+            st.error("Access denied (proposal allowed only for your assigned leads).")
             st.stop()
 
-    allowed_sections = [SECTION_INSTALL, SECTION_ADS] if SCOPE == SCOPE_BOTH else [SCOPE]
-    SECTION = st.radio("Module", allowed_sections, horizontal=True)
-
-    menu = MENU_INSTALL if SECTION == SECTION_INSTALL else MENU_ADS
-    if ROLE == ROLE_SUPERADMIN:
-        menu = menu + ["Admin Panel"]
-
-    st.markdown("### 🔎 Global Search")
-    gq = st.text_input(
-        "Search across modules",
-        key="global_search_term",
-        placeholder="Try: city, property, client, agreement, screen…"
+    pid = str(uuid.uuid4())
+    # NOTE: file_bytes storage method remains as-is in your code (you may store in Supabase storage; here DB stores metadata only)
+    audited_write(
+        section=section,
+        action="add",
+        role=a["role"],
+        username=created_by,
+        entity_table="proposals",
+        entity_id=pid,
+        entity_assigned_to=created_by,
+        operation="INSERT",
+        sql="""INSERT INTO proposals(proposal_id,record_hash,section,file_name,file_url,created_by,created_at)
+               VALUES(:id,:h,:s,:f,:url,:by,NOW())""",
+        params={"id": pid, "h": record_hash, "s": section, "f": file_name, "url": "", "by": created_by},
+        old_row_sql=None,
+        new_row_sql="SELECT * FROM proposals WHERE proposal_id=:id",
+        new_row_params={"id": pid},
+        details=f"proposal created record_hash={record_hash} file={file_name}",
+        allow_assign=True,
     )
-    st.markdown("---")
 
-    PAGE = st.selectbox("Page", menu)
-
-# Normalize to internal page keys (strip emoji/prefix)
-PAGE_KEY = re.sub(r"^[^A-Za-z0-9]+\s*", "", PAGE).strip()
-
-# Selected lead/property hash for Lead 360 panels (Interactions/Tasks/History)
-if "active_pid" not in st.session_state:
-    st.session_state["active_pid"] = ""
-
-pid = st.session_state["active_pid"]
-
-# =========================================================
-# LOAD LEADS (CACHED PREP) + CODES ONLY WHEN FILE CHANGES
-# =========================================================
-leads_df, leads_version = read_leads_file(upload)
-
-# If we already processed codes for this same leads file, reuse from session
-if st.session_state.get("leads_version") != leads_version:
-    st.session_state["leads_version"] = leads_version
-    st.session_state.pop("codes_df", None)
-    st.session_state.pop("disp_map", None)
-    st.session_state.pop("pid_to_code", None)
-
-if "codes_df" not in st.session_state:
-    codes_df = ensure_property_codes(leads_df)
-    st.session_state["codes_df"] = codes_df
-    st.session_state["disp_map"] = property_display_map(codes_df, leads_df)
-    st.session_state["pid_to_code"] = dict(zip(codes_df["property_id"].astype("string"), codes_df["property_code"].astype("string")))
-
-codes_df = st.session_state["codes_df"]
-disp_map = st.session_state["disp_map"]
-pid_to_code = st.session_state["pid_to_code"]
-
-# Lead updates (cached)
-upd = list_lead_updates(SECTION)
-leads_df = leads_df.merge(upd, left_on="__hash", right_on="record_hash", how="left")
-
-for c, default in [("status", "New"), ("assigned_to", ""), ("lead_source", "Cold Call"), ("notes", ""), ("follow_up", "")]:
-    leads_df[c] = leads_df[c].fillna(default)
-
-# field/viewer: only own assigned
-if ROLE in [ROLE_INSTALL_FIELD, ROLE_ADS_FIELD, ROLE_VIEWER]:
-    leads_df = leads_df[leads_df["assigned_to"].astype("string") == USER]
-
-# KPI sticky header
-st.markdown("<div class='sticky-wrap'>", unsafe_allow_html=True)
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    kpi("Leads", f"{len(leads_df):,}")
-with c2:
-    kpi("New", f"{int((leads_df['status'] == 'New').sum()):,}")
-with c3:
-    kpi("Follow-up", f"{int((leads_df['status'] == 'Follow-up Required').sum()):,}")
-with c4:
-    kpi("Interested", f"{int((leads_df['status'] == 'Interested').sum()):,}")
-st.markdown("</div>", unsafe_allow_html=True)
-# =========================================================
-# UI PAGES (Commit 2)
-# =========================================================
 
 def page_home():
     page_title("Home", "Fast global search + quick actions")
@@ -2075,12 +2395,161 @@ def page_reports():
     page_title("Reports", "Exports + operational summaries")
     st.info("Add exports here (CSV/PDF) based on section & filters.")
 
+def _hash_password(p: str) -> str:
+    # Use the same hashing style already used by the app (pbkdf2_hash)
+    return pbkdf2_hash(p)
+
+
+def _user_exists(username: str) -> bool:
+    df = qdf("SELECT 1 FROM users WHERE username=:u", {"u": username})
+    return bool(df is not None and len(df))
+
+
+def _get_user_row(username: str) -> dict | None:
+    row = get_user(username)
+    if not row:
+        return None
+    # canonicalize role for UI only; do not mutate DB here
+    row["role"] = canonical_role(row.get("role",""), row.get("section_scope"))
+    return row
+
+
+def _scope_from_role(role: str) -> str:
+    sc = role_default_scope(role)
+    return sc or SECTION_INSTALL
+
+
 def page_admin_panel():
     page_title("Admin Panel", "Users + permissions + system settings")
-    if ROLE != ROLE_SUPERADMIN:
+
+    a = current_auth()
+    allowed = (a["role"] == ROLE_SUPER_ADMIN) or (ADMIN_HEAD_ENABLED and a["role"] == ROLE_MARKETING_HEAD)
+    if not allowed:
         st.error("Access denied.")
         return
-    st.info("Add user creation, role assignment, permission controls, etc.")
+
+    tabA, tabB, tabC, tabD = st.tabs(["➕ Create User", "✏️ Edit User", "🔑 Reset Password", "📋 Role/Permission Matrix"])
+
+    # --- A) Create User ---
+    with tabA:
+        with st.form("admin_create_user"):
+            u = st.text_input("username").strip()
+            role = st.selectbox("role", list(ROLE_LABEL.keys()), format_func=lambda x: ROLE_LABEL.get(x, x))
+            module_scope = _scope_from_role(role)
+            st.text_input("module_scope (auto)", value=module_scope, disabled=True)
+            district_scope = st.multiselect("district_scope (optional)", options=[], help="Optional. Stored as JSON list. Add your districts list later if you want.")
+            is_active = st.checkbox("is_active", value=True)
+
+            mode = st.selectbox("password", ["Auto-generate", "Set temporary password"], index=0)
+            temp_pw = ""
+            if mode == "Set temporary password":
+                temp_pw = st.text_input("temporary_password", type="password")
+            ok = st.form_submit_button("Create User", type="primary")
+
+        if ok:
+            if not u:
+                st.error("username is required.")
+            elif _user_exists(u):
+                st.error("username already exists.")
+            else:
+                if mode == "Auto-generate":
+                    # 12-char random password (shown once)
+                    temp_pw = uuid.uuid4().hex[:12]
+                if not temp_pw:
+                    st.error("password required.")
+                else:
+                    ph = _hash_password(temp_pw)
+                    exec_sql(
+                        """INSERT INTO users(username,password_hash,role,section_scope,is_active,district_scope,created_at,updated_at)
+                           VALUES(:u,:p,:r,:s,:a,CAST(:d AS jsonb),NOW(),NOW())""",
+                        {"u": u, "p": ph, "r": role, "s": module_scope, "a": (1 if is_active else 0), "d": _json_safe(district_scope or [])},
+                    )
+                    audit(a["user"], "USER_CREATE", f"created user {u}",
+                          entity_table="users", entity_id=u, operation="INSERT",
+                          old_data=None,
+                          new_data={"username": u, "role": role, "section_scope": module_scope, "is_active": int(is_active), "district_scope": district_scope},
+                          changed_fields=["username","role","section_scope","is_active","district_scope"])
+                    st.success("User created.")
+                    if mode == "Auto-generate":
+                        st.warning("Auto-generated temporary password (copy now):")
+                        st.code(temp_pw)
+
+    # --- B) Edit User ---
+    with tabB:
+        users = qdf("SELECT username FROM users ORDER BY username")
+        opts = users["username"].tolist() if users is not None and len(users) else []
+        pick = st.selectbox("Select user", opts)
+        if pick:
+            row = _get_user_row(pick) or {}
+            with st.form("admin_edit_user"):
+                role2 = st.selectbox("role", list(ROLE_LABEL.keys()), index=(list(ROLE_LABEL.keys()).index(row.get("role")) if row.get("role") in ROLE_LABEL else 0),
+                                     format_func=lambda x: ROLE_LABEL.get(x, x))
+                scope2 = _scope_from_role(role2)
+                st.text_input("module_scope (auto)", value=scope2, disabled=True)
+                ds2 = st.text_area("district_scope (JSON list) optional", value=_json_safe(row.get("district_scope") or []))
+                active2 = st.checkbox("is_active", value=bool(int(row.get("is_active", 0) or 0)))
+                ok2 = st.form_submit_button("Save changes", type="primary")
+
+            if ok2:
+                old = get_user(pick) or {}
+                try:
+                    ds_val = json.loads(ds2) if ds2.strip() else []
+                except Exception:
+                    st.error("district_scope must be valid JSON (example: [\"Ahmedabad\",\"Rajkot\"])")
+                    st.stop()
+
+                exec_sql(
+                    """UPDATE users
+                       SET role=:r, section_scope=:s, district_scope=CAST(:d AS jsonb),
+                           is_active=:a, updated_at=NOW()
+                       WHERE username=:u""",
+                    {"u": pick, "r": role2, "s": scope2, "d": _json_safe(ds_val), "a": (1 if active2 else 0)},
+                )
+                new = get_user(pick) or {}
+                changed = _diff_fields(old, new)
+                audit(a["user"], "USER_UPDATE", f"updated user {pick}",
+                      entity_table="users", entity_id=pick, operation="UPDATE",
+                      old_data=old, new_data=new, changed_fields=changed)
+                st.success("Updated.")
+                st.rerun()
+
+    # --- C) Reset Password ---
+    with tabC:
+        users = qdf("SELECT username FROM users ORDER BY username")
+        opts = users["username"].tolist() if users is not None and len(users) else []
+        pick = st.selectbox("User", opts, key="rp_user")
+        with st.form("admin_reset_pw"):
+            newp = st.text_input("New password", type="password")
+            ok = st.form_submit_button("Reset Password", type="primary")
+        if ok:
+            if not pick or not newp:
+                st.error("User and password required.")
+            else:
+                old = get_user(pick) or {}
+                exec_sql("UPDATE users SET password_hash=:p, updated_at=NOW() WHERE username=:u", {"u": pick, "p": _hash_password(newp)})
+                new = get_user(pick) or {}
+                # Do NOT store plaintext password
+                audit(a["user"], "USER_RESET_PASSWORD", f"reset password for {pick}",
+                      entity_table="users", entity_id=pick, operation="UPDATE",
+                      old_data={"username": old.get("username"), "role": old.get("role"), "is_active": old.get("is_active")},
+                      new_data={"username": new.get("username"), "role": new.get("role"), "is_active": new.get("is_active")},
+                      changed_fields=["password_hash"])
+                st.success("Password reset.")
+
+    # --- D) Role/Permission Matrix Viewer ---
+    with tabD:
+        st.markdown("#### Matrix (roles × actions)")
+        actions = ["view", "add", "edit", "delete", "assign", "approve", "export"]
+        rows = []
+        for r in ROLE_LABEL.keys():
+            scope = role_default_scope(r) or ""
+            for sec in ([SECTION_INSTALL, SECTION_ADS] if scope == SCOPE_BOTH else [scope]):
+                row = {"role": r, "module": sec}
+                for a1 in actions:
+                    # for matrix display, treat assignee checks as not applicable
+                    row[a1] = "✅" if can_action(sec, a1, r, username="__matrix__", entity_assigned_to="__matrix__", allow_assign=True) else "—"
+                rows.append(row)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, height=420)
 
 def render_page(page_key: str):
     # Normalize the same way your code does (PAGE_KEY already normalized)
@@ -2378,12 +2847,8 @@ elif PAGE_KEY == "Tasks & Alerts":
         notes = st.text_area("Notes", height=80)
         ok = st.form_submit_button("Create Task", type="primary", disabled=not can_add_task)
     if ok:
-        exec_sql(
-            """INSERT INTO tasks(id,record_hash,section,title,task_type,priority,status,assigned_to,due_date,created_by,notes)
-                VALUES(:id,NULL,:s,:t,:tt,:p,:st,:a,:d,:by,:n)""",
-            {"id": str(uuid.uuid4()), "s": SECTION, "t": title or "Task", "tt": task_type, "p": priority, "st": status_t, "a": assignee, "d": due.isoformat(), "by": USER, "n": notes},
-        )
-        audit(USER, "ADD_TASK", f"section={SECTION} title={title}")
+        create_task(record_hash=None, section=SECTION, title=title or "Task", task_type=task_type, priority=priority, status=status_t,
+                    assigned_to=assignee, due_date=due.isoformat(), created_by=USER, notes=notes)
         st.success("Task created.")
         st.rerun()
 
@@ -2511,21 +2976,8 @@ elif PAGE_KEY == "Leads Pipeline":
                         ok = st.form_submit_button("➕ Add Interaction", type="primary", disabled=not can_add_int)
 
                     if ok:
-                        exec_sql(
-                            """INSERT INTO interactions(id,record_hash,section,mode,remarks,next_follow_up_date,created_by,attachment_url)
-                                VALUES(:id,:h,:s,:m,:r,:n,:by,:a)""",
-                            {
-                                "id": str(uuid.uuid4()),
-                                "h": pid,
-                                "s": SECTION,
-                                "m": mode,
-                                "r": remarks,
-                                "n": (next_fu.isoformat() if next_fu else None),
-                                "by": USER,
-                                "a": attach,
-                            },
-                        )
-                        audit(USER, "ADD_INTERACTION", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} mode={mode}")
+                        create_interaction(record_hash=pid, section=SECTION, mode=mode, remarks=remarks, next_follow_up_date=(next_fu.isoformat() if next_fu else None),
+                               created_by=USER, attachment_url=attach or None)
                         st.success("Interaction added.")
                         st.rerun()
 
@@ -2561,24 +3013,8 @@ elif PAGE_KEY == "Leads Pipeline":
                         ok2 = st.form_submit_button("➕ Create Task", type="primary", disabled=not can_add_task)
 
                     if ok2:
-                        exec_sql(
-                            """INSERT INTO tasks(id,record_hash,section,title,task_type,priority,status,assigned_to,due_date,created_by,notes)
-                                VALUES(:id,:h,:s,:t,:tt,:p,:st,:a,:d,:by,:n)""",
-                            {
-                                "id": str(uuid.uuid4()),
-                                "h": pid,
-                                "s": SECTION,
-                                "t": title or "Task",
-                                "tt": task_type,
-                                "p": priority,
-                                "st": status_t,
-                                "a": assignee,
-                                "d": due.isoformat() if due else None,
-                                "by": USER,
-                                "n": notes_t,
-                            },
-                        )
-                        audit(USER, "ADD_TASK", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} title={title}")
+                        create_task(record_hash=pid, section=SECTION, title=title or "Task", task_type=task_type, priority=priority, status=status_t,
+                    assigned_to=assignee, due_date=due.isoformat(), created_by=USER, notes=notes_t)
                         st.success("Task created.")
                         st.rerun()
 
@@ -2652,41 +3088,22 @@ elif PAGE_KEY == "Inventory (Sites)":
 
                 ok = st.form_submit_button("Save", type="primary")
             if ok:
-                exec_sql(
-                    """INSERT INTO inventory_sites(property_id,property_code,district,city,property_name,property_address,latitude,longitude,contact_person,contact_details,agreed_rent_pm,site_rating,notes,last_updated)
-                       VALUES(:property_id,:property_code,:district,:city,:property_name,:property_address,:latitude,:longitude,:contact_person,:contact_details,:agreed_rent_pm,:site_rating,:notes,NOW())
-                       ON CONFLICT(property_id) DO UPDATE SET
-                         property_code=EXCLUDED.property_code,
-                         district=EXCLUDED.district,
-                         city=EXCLUDED.city,
-                         property_name=EXCLUDED.property_name,
-                         property_address=EXCLUDED.property_address,
-                         latitude=EXCLUDED.latitude,
-                         longitude=EXCLUDED.longitude,
-                         contact_person=EXCLUDED.contact_person,
-                         contact_details=EXCLUDED.contact_details,
-                         agreed_rent_pm=EXCLUDED.agreed_rent_pm,
-                         site_rating=EXCLUDED.site_rating,
-                         notes=EXCLUDED.notes,
-                         last_updated=NOW()
-                    """,
-                    {
-                        "property_id": property_id,
-                        "property_code": property_code,
-                        "district": district,
-                        "city": city,
-                        "property_name": property_name,
-                        "property_address": property_address,
-                        "latitude": float(latitude) if str(latitude).strip() else None,
-                        "longitude": float(longitude) if str(longitude).strip() else None,
-                        "contact_person": contact_person,
-                        "contact_details": contact_details,
-                        "agreed_rent_pm": float(agreed_rent_pm) if str(agreed_rent_pm).strip() else None,
-                        "site_rating": int(site_rating),
-                        "notes": notes,
-                    },
-                )
-                audit(USER, "UPSERT_INVENTORY", f"{SECTION} {property_id}")
+                upsert_inventory({
+                    "property_id": property_id,
+                    "property_code": property_code,
+                    "district": district,
+                    "city": city,
+                    "property_name": property_name,
+                    "property_address": property_address,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "contact_person": contact_person,
+                    "contact_details": contact_details,
+                    "agreed_rent_pm": agreed_rent_pm,
+                    "site_rating": site_rating,
+                    "notes": notes,
+                    "section": SECTION,
+                }, username=USER)
                 st.success("Saved.")
                 st.rerun()
 
@@ -2695,7 +3112,10 @@ elif PAGE_KEY == "Inventory (Sites)":
             if not can(SECTION, "edit", ROLE):
                 st.error("No permission.")
             else:
-                exec_sql("""
+                if current_auth()["role"] not in MANAGER_ROLES:
+                    st.error("Access denied.")
+                else:
+                    exec_sql("""
                     UPDATE inventory_sites s
                     SET no_screens_installed = COALESCE(x.cnt,0), last_updated=NOW()
                     FROM (
@@ -2705,7 +3125,10 @@ elif PAGE_KEY == "Inventory (Sites)":
                       GROUP BY property_id
                     ) x
                     WHERE s.property_id = x.property_id
-                """)
+                    """)
+                    audit(USER, "BULK_UPDATE", "recalculate no_screens_installed", entity_table="inventory_sites", entity_id=None, operation="UPDATE",
+                          old_data=None, new_data=None, changed_fields=["no_screens_installed"])
+
                 audit(USER, "RECOUNT_SCREENS", f"{SECTION}")
                 st.success("Updated counts.")
                 st.rerun()
@@ -2798,32 +3221,17 @@ elif PAGE_KEY == "Screens":
                 ok = st.form_submit_button("Save", type="primary")
 
             if ok:
-                exec_sql(
-                    """
-                    INSERT INTO screens(screen_id, property_id, screen_location, installed_by, installed_date, last_service_date, next_service_due, is_active, last_updated)
-                    VALUES(:sid,:pid,:loc,:by,:idate,:lsd,:nsd,:act,NOW())
-                    ON CONFLICT(screen_id) DO UPDATE SET
-                      property_id=EXCLUDED.property_id,
-                      screen_location=EXCLUDED.screen_location,
-                      installed_by=EXCLUDED.installed_by,
-                      installed_date=EXCLUDED.installed_date,
-                      last_service_date=EXCLUDED.last_service_date,
-                      next_service_due=EXCLUDED.next_service_due,
-                      is_active=EXCLUDED.is_active,
-                      last_updated=NOW()
-                    """,
-                    {
-                        "sid": screen_id,
-                        "pid": property_id,
-                        "loc": screen_location,
-                        "by": installed_by,
-                        "idate": installed_date or None,
-                        "lsd": last_service_date or None,
-                        "nsd": next_service_due or None,
-                        "act": 1 if is_active else 0,
-                    },
-                )
-                audit(USER, "UPSERT_SCREEN", f"{screen_id}")
+                upsert_screen({
+                    "screen_id": sid,
+                    "property_id": pid,
+                    "screen_location": loc,
+                    "installed_by": installed_by,
+                    "installed_date": installed_date,
+                    "last_service_date": last_service_date,
+                    "next_service_due": next_service_due,
+                    "is_active": 1 if is_active else 0,
+                    "section": SECTION,
+                }, username=USER)
                 st.success("Saved.")
                 st.rerun()
 elif PAGE_KEY == "Service Center":
@@ -2867,11 +3275,7 @@ elif PAGE_KEY == "Service Center":
         if not can(SECTION, "edit", ROLE):
             st.error("No permission.")
         else:
-            exec_sql(
-                "UPDATE screens SET last_service_date=:ls, next_service_due=:nd, last_updated=NOW() WHERE screen_id=:sid",
-                {"ls": last_service_date, "nd": next_due, "sid": sid},
-            )
-            audit(USER, "MARK_SERVICED", f"{SECTION} {sid} ls={last_service_date} nd={next_due}")
+            mark_serviced(sid, last_service_date, next_due, by_user, SECTION)
             st.success("Updated.")
             st.rerun()
 
