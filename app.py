@@ -226,34 +226,32 @@ connect_args = {
 if ipv4:
     connect_args["hostaddr"] = ipv4
 
-    if ipv4:
-        connect_args["hostaddr"] = ipv4
+try:
+    eng = create_engine(
+        url,
+        pool_pre_ping=True,
+        poolclass=NullPool,   # safest with Supabase Pooler/PgBouncer
+        connect_args=connect_args,
+    )
 
-    try:
-        eng = create_engine(
-            url,
-            pool_pre_ping=True,
-            poolclass=NullPool,   # safest with Supabase Pooler/PgBouncer
-            connect_args=connect_args,
-        )
+    # smoke test
+    with eng.connect() as conn:
+        conn.execute(text("SELECT 1"))
+        conn.commit()  # Optional but good practice
 
-        # smoke test
-        with eng.connect() as conn:
-            conn.execute(text("SELECT 1"))
+    return eng
 
-                return eng
-
-    except Exception as e:
-        st.error("Database connection failed.")
-        st.caption(
-            "Checklist:\n"
-            "• Pooler URL must be port 6543 and username postgres.<project_ref>\n"
-            "• Direct DB URL must be db.<project_ref>.supabase.co:5432 and username postgres\n"
-            "• Use psycopg3 (requirements: psycopg[binary] + SQLAlchemy)\n"
-            "• If your runtime blocks outbound ports, DB connect will fail even with correct URL."
-        )
-        st.exception(e)
-        st.stop()
+except Exception as e:
+    st.error("Database connection failed.")
+    st.caption(
+        "Checklist:\n"
+        "• Pooler URL must be port 6543 and username postgres.<project_ref>\n"
+        "• Direct DB URL must be db.<project_ref>.supabase.co:5432 and username postgres\n"
+        "• Use psycopg3 (requirements: psycopg[binary] + SQLAlchemy)\n"
+        "• If your runtime blocks outbound ports, DB connect will fail even with correct URL."
+    )
+    st.exception(e)
+    st.stop()
 
 def exec_sql(sql: str, params: dict | None = None) -> None:
     try:
