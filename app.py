@@ -217,16 +217,7 @@ def engine():
             "• Some runtimes block outbound DB ports; then DB connect fails even with correct URL."
         )
         st.exception(e)
-        st.stop())
-    st.caption(
-        "Checklist:\n"
-        "• Pooler URL must be port 6543 and username postgres.<project_ref>\n"
-        "• Direct DB URL must be db.<project_ref>.supabase.co:5432 and username postgres\n"
-        "• Use psycopg3 (requirements: psycopg[binary] + SQLAlchemy)\n"
-        "• If your runtime blocks outbound ports, DB connect will fail even with correct URL."
-    )
-    st.exception(e)
-    st.stop()
+        st.stop()
 
 def exec_sql(sql: str, params: dict | None = None) -> None:
     try:
