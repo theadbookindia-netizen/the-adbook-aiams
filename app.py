@@ -1395,6 +1395,9 @@ def save_proposal_pdf(section: str, property_id: str, pdf_bytes: bytes, created_
 # =========================================================
 # SIDEBAR NAV + USER HELP
 # =========================================================
+from pathlib import Path
+import re
+
 # Menus
 MENU_INSTALL = [
     "🏠 Home", "📈 Management Dashboard", "🎯 Installation Opportunities",
@@ -1410,17 +1413,21 @@ MENU_ADS = [
     "📝 Agreements", "💰 Billing & Reminders", "💬 WhatsApp", "📊 Reports"
 ]
 
-menu = MENU_INSTALL if SECTION == SECTION_INSTALL else MENU_ADS
-if ROLE == ROLE_SUPERADMIN:
-    menu = menu + ["Admin Panel"]with st.sidebar:
+with st.sidebar:
     if Path(LOGO_PATH).exists():
         st.image(LOGO_PATH, use_column_width=True)
+
     st.markdown("### The Adbook AIAMS")
     st.caption("Outdoor Media Operations System")
     st.markdown("---")
 
     st.markdown("**Quick Instructions**")
-    st.caption("• Use Home for fast search\n• Use Leads to update status\n• Use Inventory/Screens/Documents for Installation\n• Use WhatsApp for click-to-chat")
+    st.caption(
+        "• Use Home for fast search\n"
+        "• Use Leads to update status\n"
+        "• Use Inventory/Screens/Documents for Installation\n"
+        "• Use WhatsApp for click-to-chat"
+    )
     st.markdown("---")
 
     st.markdown("### AIAMS")
@@ -1438,31 +1445,28 @@ if ROLE == ROLE_SUPERADMIN:
     allowed_sections = [SECTION_INSTALL, SECTION_ADS] if SCOPE == SCOPE_BOTH else [SCOPE]
     SECTION = st.radio("Module", allowed_sections, horizontal=True)
 
-    MENU_INSTALL = ["🏠 Home", "📈 Management Dashboard", "🎯 Installation Opportunities", "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "🗂 Inventory (Sites)", "🖥 Screens", "🛠 Service Center", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "📄 Documents Vault", "🗺 Map View", "📃 Proposals", "💬 WhatsApp", "📊 Reports"]
-    MENU_ADS = ["🏠 Home", "📈 Management Dashboard", "💼 Ads Opportunities", "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "💬 WhatsApp", "📊 Reports"]
     menu = MENU_INSTALL if SECTION == SECTION_INSTALL else MENU_ADS
     if ROLE == ROLE_SUPERADMIN:
         menu = menu + ["Admin Panel"]
 
-    
-st.markdown("### 🔎 Global Search")
-gq = st.text_input("Search across modules", key="global_search_term", placeholder="Try: city, property, client, agreement, screen…")
-st.markdown("---")
+    st.markdown("### 🔎 Global Search")
+    gq = st.text_input(
+        "Search across modules",
+        key="global_search_term",
+        placeholder="Try: city, property, client, agreement, screen…"
+    )
+    st.markdown("---")
 
-PAGE = st.selectbox("Page", menu)
+    PAGE = st.selectbox("Page", menu)
 
 # Normalize to internal page keys (strip emoji/prefix)
-PAGE_KEY = re.sub(r"^[^A-Za-z0-9]+\\s*", "", PAGE).strip()
-
+PAGE_KEY = re.sub(r"^[^A-Za-z0-9]+\s*", "", PAGE).strip()
 
 # Selected lead/property hash for Lead 360 panels (Interactions/Tasks/History)
-# Store selected lead/property ID safely
 if "active_pid" not in st.session_state:
     st.session_state["active_pid"] = ""
 
 pid = st.session_state["active_pid"]
-
-
 
 # =========================================================
 # LOAD LEADS (CACHED PREP) + CODES ONLY WHEN FILE CHANGES
