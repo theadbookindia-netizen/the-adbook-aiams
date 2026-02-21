@@ -169,46 +169,69 @@ import os, socket
 
 @st.cache_resource(show_spinner=False)
 def db_engine():
-    db_url = get_database_url()
-    if not db_url:
-        st.error("DATABASE_URL not found in Streamlit secrets.")
-        st.stop()
+    import socket
+    from urllib.parse import urlparse
 
-    # normalize scheme + force psycopg3 driver
-    url = db_url.strip()
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
-    if url.startswith("postgresql://") and "+psycopg" not in url:
-        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+    def _resolve_ipv4(host: str):
+        try:
+            infos = socket.getaddrinfo(
+                host, None,
+                family=socket.AF_INET,
+                type=socket.SOCK_STREAM
+            )
+            if infos:
+                return infos[0][4][0]
+        except Exception:
+            pass
+        return None
 
-    # ---- Force IPv4 (fix for "Cannot assign requested address" on IPv6) ----
-    parsed = urlparse(url.replace("postgresql+psycopg://", "postgresql://", 1))
-    host = parsed.hostname or ""
-    connect_args = {}
-    ipv4 = _resolve_ipv4(host)
-    if ipv4:
-        connect_args["hostaddr"] = ipv4  # psycopg supports this
+    try:
+        db_url = get_database_url()
+        if not db_url:
+            st.error("DATABASE_URL not found in Streamlit secrets.")
+            st.stop()
 
-    eng = create_engine(
-        url,
-        pool_pre_ping=True,
-        poolclass=NullPool,
-        connect_args=connect_args,
-    )
+        # normalize scheme + force psycopg3
+        url = db_url.strip()
 
-    # smoke test
-    with eng.connect() as conn:
-        conn.execute(text("SELECT 1"))
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+
+        if url.startswith("postgresql://") and "+psycopg" not in url:
+            url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+        # Force IPv4
+        parsed = urlparse(
+            url.replace("postgresql+psycopg://", "postgresql://", 1)
+        )
+        host = parsed.hostname or ""
+
+        connect_args = {}
+        ipv4 = _resolve_ipv4(host)
+        if ipv4:
+            connect_args["hostaddr"] = ipv4
+
+        eng = create_engine(
+            url,
+            pool_pre_ping=True,
+            poolclass=NullPool,
+            connect_args=connect_args,
+        )
+
+        # Smoke test
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
 
         return eng
+
     except Exception as e:
         st.error("Database connection failed.")
         st.caption(
             "Checklist:\n"
-            "• Pooler URL: port 6543 and username like postgres.<project_ref>\n"
+            "• Pooler URL: port 6543 and username postgres.<project_ref>\n"
             "• Direct DB URL: db.<project_ref>.supabase.co:5432 and username postgres\n"
-            "• requirements.txt must include: sqlalchemy and psycopg[binary]\n"
-            "• Some runtimes block outbound DB ports; then DB connect fails even with correct URL."
+            "• requirements.txt must include sqlalchemy + psycopg[binary]\n"
+            "• Some runtimes block outbound DB ports\n"
         )
         st.exception(e)
         st.stop()
