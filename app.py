@@ -2223,6 +2223,30 @@ def read_leads_file(upload=None) -> tuple[pd.DataFrame, str]:
     df = prepare_leads_from_bytes(file_bytes, filename, excel_sheet)
     return df, version_key
 
+def read_leads_file(upload=None) -> tuple[pd.DataFrame, str]:
+    """
+    Returns (prepared_df, version_key)
+    version_key changes only when underlying file changes.
+    """
+    if upload is None:
+        if not os.path.exists(DATA_FILE):
+            st.error(f"Missing {DATA_FILE}. Upload a file OR add {DATA_FILE} to repo.")
+            st.stop()
+        df = pd.read_csv(DATA_FILE)
+        version_key = f"local:{os.path.getmtime(DATA_FILE)}"
+    else:
+        raw = upload.getvalue()
+        version_key = f"upload:{len(raw)}:{hash(raw)}"
+        df = pd.read_csv(io.BytesIO(raw))
+
+    # Keep same column normalization style as your app
+    df.columns = [c.strip() for c in df.columns]
+
+    # If your app already has prepare_leads_df(), use it
+    if "prepare_leads_df" in globals():
+        df = prepare_leads_df(df)
+
+    return df, version_key
 
 # =========================================================
 # PROPERTY CODES (READ CACHED, INSERT ONLY WHEN MISSING)
