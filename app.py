@@ -296,10 +296,11 @@ def column_exists(table_name: str, column_name: str) -> bool:
     return bool(df.iloc[0]["ex"])
 
 # =========================================================
-# MIGRATIONS + SEED (RUN ONCE PER SERVER)
+# DB MIGRATIONS + SEED (RUN ONCE PER SERVER)
 # =========================================================
-def migrate_and_seed():
-    # tables
+@st.cache_resource(show_spinner=False)
+def init_db_once():
+    # --- Core tables ---
     exec_sql("""
     CREATE TABLE IF NOT EXISTS users(
       username TEXT PRIMARY KEY,
@@ -315,7 +316,6 @@ def migrate_and_seed():
 
     exec_sql("""
     CREATE TABLE IF NOT EXISTS permissions(
-      id TEXT PRIMARY KEY,
       role TEXT NOT NULL,
       section TEXT NOT NULL,
       can_view INTEGER NOT NULL DEFAULT 0,
@@ -323,7 +323,8 @@ def migrate_and_seed():
       can_edit INTEGER NOT NULL DEFAULT 0,
       can_delete INTEGER NOT NULL DEFAULT 0,
       can_export INTEGER NOT NULL DEFAULT 0,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(role, section)
     )
     """)
 
@@ -389,46 +390,21 @@ def migrate_and_seed():
     )
     """)
 
-@st.cache_resource(show_spinner=False)
-def init_db_once_cached():
-    migrate_and_seed()
-    return True
-
-# Run once per server
-init_db_once_cached()
-    
-    # ---- AIAMS Management Upgrade (safe additions) ----
-    # Add optional management fields to inventory_sites (won't break existing rows)
-    exec_sql("""
-    ALTER TABLE IF EXISTS inventory_sites
-      ADD COLUMN IF NOT EXISTS property_type TEXT,
-      ADD COLUMN IF NOT EXISTS property_status TEXT,
-      ADD COLUMN IF NOT EXISTS construction_end_date DATE,
-      ADD COLUMN IF NOT EXISTS cost_inr DOUBLE PRECISION,
-      ADD COLUMN IF NOT EXISTS high_value_flag INTEGER DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS footfall_estimate INTEGER,
-      ADD COLUMN IF NOT EXISTS visibility_score INTEGER,
-      ADD COLUMN IF NOT EXISTS expected_ad_revenue DOUBLE PRECISION,
-      ADD COLUMN IF NOT EXISTS roi_band TEXT
-    """)
-
-    # Interaction timeline for leads (calls/emails/visits)
+    # --- Optional tables (safe create only) ---
     exec_sql("""
     CREATE TABLE IF NOT EXISTS interactions(
       id TEXT PRIMARY KEY,
       record_hash TEXT NOT NULL,
       section TEXT NOT NULL,
-      interaction_date TIMESTAMP DEFAULT NOW(),
+      interaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       mode TEXT NOT NULL,
       remarks TEXT,
       next_follow_up_date TEXT,
       created_by TEXT,
       attachment_url TEXT
-    )""")
+    )
+    """)
 
-    exec_sql("""CREATE INDEX IF NOT EXISTS idx_interactions_record ON interactions(record_hash, section, interaction_date DESC)""")
-
-    # Status history (for funnel, conversion time, audit)
     exec_sql("""
     CREATE TABLE IF NOT EXISTS lead_status_history(
       id TEXT PRIMARY KEY,
@@ -436,14 +412,12 @@ init_db_once_cached()
       section TEXT NOT NULL,
       status_from TEXT,
       status_to TEXT NOT NULL,
-      changed_at TIMESTAMP DEFAULT NOW(),
+      changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       changed_by TEXT,
       note TEXT
-    )""")
+    )
+    """)
 
-    exec_sql("""CREATE INDEX IF NOT EXISTS idx_lsh_record ON lead_status_history(record_hash, section, changed_at DESC)""")
-
-    # Tasks / reminders
     exec_sql("""
     CREATE TABLE IF NOT EXISTS tasks(
       id TEXT PRIMARY KEY,
@@ -455,49 +429,12 @@ init_db_once_cached()
       status TEXT DEFAULT 'Open',
       assigned_to TEXT,
       due_date TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       created_by TEXT,
       notes TEXT
-    )""")
+    )
+    """)
 
-    exec_sql("""CREATE INDEX IF NOT EXISTS idx_tasks_assignee_due ON tasks(assigned_to, due_date, status)""")
-
-    # Ads CRM (optional)
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS clients(
-      id TEXT PRIMARY KEY,
-      client_name TEXT NOT NULL,
-      industry TEXT,
-      gst_number TEXT,
-      billing_address TEXT,
-      poc_name TEXT,
-      poc_phone TEXT,
-      poc_email TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )""")
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS campaigns(
-      id TEXT PRIMARY KEY,
-      client_id TEXT,
-      campaign_name TEXT NOT NULL,
-      start_date TEXT,
-      end_date TEXT,
-      status TEXT DEFAULT 'Proposed',
-      total_value DOUBLE PRECISION,
-      created_at TIMESTAMP DEFAULT NOW()
-    )""")
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS rate_cards(
-      id TEXT PRIMARY KEY,
-      district TEXT,
-      screen_type TEXT,
-      slot_seconds INTEGER,
-      rate_per_week DOUBLE PRECISION,
-      rate_per_month DOUBLE PRECISION,
-      effective_from TEXT
-    )""")
     exec_sql("""
     CREATE TABLE IF NOT EXISTS screens(
       screen_id TEXT PRIMARY KEY,
@@ -508,80 +445,9 @@ init_db_once_cached()
       last_service_date TEXT,
       next_service_due TEXT,
       is_active INTEGER DEFAULT 1,
-      last_updated TIMESTAMP DEFAULT NOW()
-    )""")
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS documents_install(
-      doc_id TEXT PRIMARY KEY,
-      property_id TEXT,
-      doc_type TEXT,
-      filename TEXT,
-      issue_date TEXT,
-      expiry_date TEXT,
-      uploaded_by TEXT,
-      uploaded_at TIMESTAMP DEFAULT NOW()
-    )""")
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS proposals(
-      proposal_id TEXT PRIMARY KEY,
-      section TEXT NOT NULL,
-      property_id TEXT,
-      proposal_no INTEGER NOT NULL,
-      created_by TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      pdf_filename TEXT,
-      status TEXT
-    )""")
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS whatsapp_logs(
-      log_id TEXT PRIMARY KEY,
-      lead_hash TEXT,
-      username TEXT,
-      action_status TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )""")
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS company_settings(
-      settings_id TEXT PRIMARY KEY,
-      gst_no TEXT,
-      bank_details TEXT,
-      whatsapp_limit_per_hour INTEGER DEFAULT 50,
-      updated_at TIMESTAMP DEFAULT NOW()
-    )""")
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS user_profiles(
-      username TEXT PRIMARY KEY,
-      signature_filename TEXT,
-      designation TEXT,
-      mobile TEXT,
-      email TEXT,
-      updated_at TIMESTAMP DEFAULT NOW()
-    )""")
-
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS manual_leads(
-      lead_id TEXT PRIMARY KEY,
-      section TEXT NOT NULL,
-      district TEXT,
-      city TEXT,
-      property_name TEXT,
-      property_address TEXT,
-      promoter_name TEXT,
-      promoter_mobile TEXT,
-      promoter_email TEXT,
-      property_type TEXT,
-      property_status TEXT,
-      notes TEXT,
-      created_by TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )""")
+      last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
     exec_sql("""
     CREATE TABLE IF NOT EXISTS agreements(
@@ -598,9 +464,10 @@ init_db_once_cached()
       status TEXT,
       notes TEXT,
       created_by TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )""")
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
     exec_sql("""
     CREATE TABLE IF NOT EXISTS payments(
@@ -616,8 +483,9 @@ init_db_once_cached()
       reference_no TEXT,
       notes TEXT,
       created_by TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )""")
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
     exec_sql("""
     CREATE TABLE IF NOT EXISTS documents_vault(
@@ -630,8 +498,29 @@ init_db_once_cached()
       issue_date TEXT,
       expiry_date TEXT,
       uploaded_by TEXT,
-      uploaded_at TIMESTAMP DEFAULT NOW()
-    )""")
+      uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS manual_leads(
+      lead_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      district TEXT,
+      city TEXT,
+      property_name TEXT,
+      property_address TEXT,
+      promoter_name TEXT,
+      promoter_mobile TEXT,
+      promoter_email TEXT,
+      property_type TEXT,
+      property_status TEXT,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
     exec_sql("""
     CREATE TABLE IF NOT EXISTS ad_inventory(
@@ -647,56 +536,41 @@ init_db_once_cached()
       client_name TEXT,
       notes TEXT,
       created_by TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )""")
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
-    # helpful indexes (safe)
+    # --- Indexes (safe) ---
     exec_sql("CREATE INDEX IF NOT EXISTS idx_lead_updates_section_updated ON lead_updates(section, last_updated DESC)")
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_inventory_last_updated ON inventory_sites(last_updated DESC)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_inventory_search ON inventory_sites(property_code, district, city, property_name)")
     exec_sql("CREATE INDEX IF NOT EXISTS idx_screens_property ON screens(property_id)")
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_docs_property ON documents_install(property_id)")
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_wa_created ON whatsapp_logs(created_at DESC)")
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_manual_leads_section ON manual_leads(section, created_at DESC)")
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_agreements_section ON agreements(section, status)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_agreements_pid ON agreements(property_id)")
     exec_sql("CREATE INDEX IF NOT EXISTS idx_payments_due ON payments(section, due_date)")
     exec_sql("CREATE INDEX IF NOT EXISTS idx_docs_vault_prop ON documents_vault(property_id)")
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_adinv_prop ON ad_inventory(property_id)")
 
-    # seed permissions if empty
+    # --- Seed permissions if empty ---
     c = int(qdf("SELECT COUNT(*) AS c FROM permissions").iloc[0]["c"] or 0)
     if c == 0:
-        for role, sections in DEFAULT_PERMS.items():
-            for sec, perm in sections.items():
-                exec_sql(
-                    """INSERT INTO permissions(id,role,section,can_view,can_add,can_edit,can_delete,can_export)
-                       VALUES(:id,:role,:section,:v,:a,:e,:d,:x)""",
-                    {
-                        "id": str(uuid.uuid4()),
-                        "role": role,
-                        "section": sec,
-                        "v": int(perm["view"]),
-                        "a": int(perm["add"]),
-                        "e": int(perm["edit"]),
-                        "d": int(perm["delete"]),
-                        "x": int(perm["export"]),
-                    },
-                )
-
-
-
-    # indexes for faster searches (best-effort; safe if already exists)
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_inventory_search ON inventory_sites (property_code, district, city, property_name)")
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_screens_pid ON screens (property_id)")
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_agreements_pid ON agreements (property_id)")
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_payments_agreement ON payments (agreement_id)")
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_docs_property ON documents_vault (property_id)")
-    exec_sql("CREATE INDEX IF NOT EXISTS idx_adinv_property ON ad_inventory (property_id)")
+        seed = [
+            ("Super Admin", "*", 1, 1, 1, 1, 1),
+            ("Head Ops", "*", 1, 1, 1, 0, 1),
+            ("Installation Manager", "Installation", 1, 1, 1, 0, 1),
+            ("Advertisement Manager", "Advertisement", 1, 1, 1, 0, 1),
+            ("Field Team (Installation)", "Installation", 1, 1, 1, 0, 0),
+            ("Field Team (Advertisement)", "Advertisement", 1, 1, 1, 0, 0),
+            ("Viewer", "*", 1, 0, 0, 0, 0),
+        ]
+        for role, sec, v, a, e, d, x in seed:
+            exec_sql("""
+            INSERT INTO permissions(role, section, can_view, can_add, can_edit, can_delete, can_export)
+            VALUES(:r,:s,:v,:a,:e,:d,:x)
+            """, {"r": role, "s": sec, "v": v, "a": a, "e": e, "d": d, "x": x})
 
     return True
 
 
-
+# ✅ Run DB init once per server
 init_db_once()
 
 
