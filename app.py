@@ -225,7 +225,7 @@ connect_args = {
 }
 if ipv4:
     connect_args["hostaddr"] = ipv4
-    }
+
     if ipv4:
         connect_args["hostaddr"] = ipv4
 
