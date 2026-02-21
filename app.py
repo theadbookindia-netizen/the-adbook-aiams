@@ -1301,7 +1301,7 @@ with st.sidebar:
     SECTION = st.radio("Module", allowed_sections, horizontal=True)
 
     MENU_INSTALL = ["🏠 Home", "📈 Management Dashboard", "🎯 Installation Opportunities", "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "🗂 Inventory (Sites)", "🖥 Screens", "🛠 Service Center", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "📄 Documents Vault", "🗺 Map View", "📃 Proposals", "💬 WhatsApp", "📊 Reports"]
-MENU_ADS = ["🏠 Home", "📈 Management Dashboard", "💼 Ads Opportunities", "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "💬 WhatsApp", "📊 Reports"]
+    MENU_ADS = ["🏠 Home", "📈 Management Dashboard", "💼 Ads Opportunities", "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "💬 WhatsApp", "📊 Reports"]
     menu = MENU_INSTALL if SECTION == SECTION_INSTALL else MENU_ADS
     if ROLE == ROLE_SUPERADMIN:
         menu = menu + ["Admin Panel"]
