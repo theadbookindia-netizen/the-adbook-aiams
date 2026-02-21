@@ -168,7 +168,7 @@ import streamlit as st
 import os, socket
 
 @st.cache_resource(show_spinner=False)
-def engine():
+def db_engine():
     url = (os.environ.get("DATABASE_URL") or "").strip()
     if not url:
         st.error("DATABASE_URL not found in Streamlit Secrets.")
