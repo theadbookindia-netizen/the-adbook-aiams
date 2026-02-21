@@ -241,7 +241,7 @@ if ipv4:
         with eng.connect() as conn:
             conn.execute(text("SELECT 1"))
 
-            return eng
+                return eng
 
     except Exception as e:
         st.error("Database connection failed.")
