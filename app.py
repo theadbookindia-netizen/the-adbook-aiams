@@ -162,29 +162,42 @@ st.markdown(
 # =========================================================
 # DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL + PERF
 # =========================================================
+import os
+import socket
+from urllib.parse import urlparse
+
+import pandas as pd
+import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
-import streamlit as st
-import os, socket
+from sqlalchemy.exc import SQLAlchemyError
+
+
+def get_database_url() -> str:
+    """Read DATABASE_URL from Streamlit secrets first, then environment."""
+    try:
+        if "DATABASE_URL" in st.secrets:
+            return str(st.secrets["DATABASE_URL"]).strip()
+    except Exception:
+        pass
+    return os.environ.get("DATABASE_URL", "").strip()
+
+
+def _resolve_ipv4(host: str) -> str | None:
+    """Return an IPv4 address for host if available (avoids IPv6 issues)."""
+    try:
+        infos = socket.getaddrinfo(
+            host, None, family=socket.AF_INET, type=socket.SOCK_STREAM
+        )
+        if infos:
+            return infos[0][4][0]
+    except Exception:
+        pass
+    return None
+
 
 @st.cache_resource(show_spinner=False)
 def db_engine():
-    import socket
-    from urllib.parse import urlparse
-
-    def _resolve_ipv4(host: str):
-        try:
-            infos = socket.getaddrinfo(
-                host, None,
-                family=socket.AF_INET,
-                type=socket.SOCK_STREAM
-            )
-            if infos:
-                return infos[0][4][0]
-        except Exception:
-            pass
-        return None
-
     try:
         db_url = get_database_url()
         if not db_url:
@@ -193,19 +206,14 @@ def db_engine():
 
         # normalize scheme + force psycopg3
         url = db_url.strip()
-
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
-
         if url.startswith("postgresql://") and "+psycopg" not in url:
             url = url.replace("postgresql://", "postgresql+psycopg://", 1)
 
-        # Force IPv4
-        parsed = urlparse(
-            url.replace("postgresql+psycopg://", "postgresql://", 1)
-        )
+        # Force IPv4 (Streamlit Cloud sometimes fails on IPv6)
+        parsed = urlparse(url.replace("postgresql+psycopg://", "postgresql://", 1))
         host = parsed.hostname or ""
-
         connect_args = {}
         ipv4 = _resolve_ipv4(host)
         if ipv4:
@@ -214,11 +222,11 @@ def db_engine():
         eng = create_engine(
             url,
             pool_pre_ping=True,
-            poolclass=NullPool,
+            poolclass=NullPool,  # safest with Supabase Pooler/PgBouncer
             connect_args=connect_args,
         )
 
-        # Smoke test
+        # smoke test
         with eng.connect() as conn:
             conn.execute(text("SELECT 1"))
 
@@ -236,6 +244,7 @@ def db_engine():
         st.exception(e)
         st.stop()
 
+
 def exec_sql(sql: str, params: dict | None = None) -> None:
     try:
         with db_engine().begin() as conn:
@@ -245,6 +254,7 @@ def exec_sql(sql: str, params: dict | None = None) -> None:
         st.code(str(e))
         st.stop()
 
+
 def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
     try:
         with db_engine().connect() as conn:
@@ -253,6 +263,7 @@ def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
         st.error("Database error while reading data.")
         st.code(str(e))
         st.stop()
+
 
 @st.cache_data(show_spinner=False, ttl=300)
 def table_exists(table_name: str) -> bool:
@@ -265,6 +276,7 @@ def table_exists(table_name: str) -> bool:
     )
     return bool(df.iloc[0]["ex"])
 
+
 @st.cache_data(show_spinner=False, ttl=300)
 def column_exists(table_name: str, column_name: str) -> bool:
     df = qdf(
@@ -275,6 +287,7 @@ def column_exists(table_name: str, column_name: str) -> bool:
         {"t": table_name, "c": column_name},
     )
     return bool(df.iloc[0]["ex"])
+
 
 # =========================================================
 # DB MIGRATIONS + SEED (RUN ONCE PER SERVER)
@@ -371,7 +384,7 @@ def init_db_once():
     )
     """)
 
-    # --- Optional tables (safe create only) ---
+    # --- Optional tables ---
     exec_sql("""
     CREATE TABLE IF NOT EXISTS interactions(
       id TEXT PRIMARY KEY,
@@ -522,7 +535,7 @@ def init_db_once():
     )
     """)
 
-    # --- Indexes (safe) ---
+    # --- Indexes ---
     exec_sql("CREATE INDEX IF NOT EXISTS idx_lead_updates_section_updated ON lead_updates(section, last_updated DESC)")
     exec_sql("CREATE INDEX IF NOT EXISTS idx_inventory_search ON inventory_sites(property_code, district, city, property_name)")
     exec_sql("CREATE INDEX IF NOT EXISTS idx_screens_property ON screens(property_id)")
