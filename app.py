@@ -1402,6 +1402,360 @@ USER = AUTH["user"]
 ROLE = canonical_role(AUTH["role"], AUTH.get("scope"))
 SCOPE = AUTH.get("scope", SCOPE_BOTH)
 
+
+# =========================================================
+# SIDEBAR + MENU (Original Layout Preserved)
+# =========================================================
+MENU_INSTALL = [
+    "🏠 Home", "📈 Management Dashboard", "🎯 Installation Opportunities",
+    "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "🗂 Inventory (Sites)", "🖥 Screens",
+    "🛠 Service Center", "📢 Ad Sales Inventory", "📝 Agreements",
+    "💰 Billing & Reminders", "📄 Documents Vault", "🗺 Map View",
+    "📃 Proposals", "💬 WhatsApp", "📊 Reports"
+]
+
+MENU_ADS = [
+    "🏠 Home", "📈 Management Dashboard", "💼 Ads Opportunities",
+    "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "📢 Ad Sales Inventory",
+    "📝 Agreements", "💰 Billing & Reminders", "💬 WhatsApp", "📊 Reports"
+]
+
+with st.sidebar:
+    if Path(LOGO_PATH).exists():
+        st.image(LOGO_PATH, use_column_width=True)
+
+    st.markdown("### The Adbook AIAMS")
+    st.caption("Outdoor Media Operations System")
+    st.markdown("---")
+
+    st.markdown("**Quick Instructions**")
+    st.caption(
+        "• Use Home for fast search\n"
+        "• Use Leads to update status\n"
+        "• Use Inventory/Screens/Documents for Installation\n"
+        "• Use WhatsApp for click-to-chat"
+    )
+    st.markdown("---")
+
+    st.markdown("### AIAMS")
+    st.markdown(f"**User:** {USER}")
+    st.markdown(f"**Role:** {ROLE_LABEL.get(ROLE, ROLE)}")
+    st.markdown("---")
+
+    data_mode = st.radio("Data Source", ["Bundled (CSV)", "Upload Excel/CSV"], index=0)
+    upload = None
+    if data_mode == "Upload Excel/CSV":
+        upload = st.file_uploader("Upload file", type=["csv", "xlsx", "xls"])
+        if not upload:
+            st.stop()
+
+    allowed_sections = [SECTION_INSTALL, SECTION_ADS] if SCOPE == SCOPE_BOTH else [SCOPE]
+    SECTION = st.radio("Module", allowed_sections, horizontal=True)
+
+    require_module_access(SECTION)
+
+    menu = MENU_INSTALL if SECTION == SECTION_INSTALL else MENU_ADS
+    if (ROLE == ROLE_SUPER_ADMIN) or (ADMIN_HEAD_ENABLED and ROLE == ROLE_MARKETING_HEAD):
+        menu = menu + ["Admin Panel"]
+
+    st.markdown("### 🔎 Global Search")
+    gq = st.text_input(
+        "Search across modules",
+        key="global_search_term",
+        placeholder="Try: city, property, client, agreement, screen…"
+    )
+    st.markdown("---")
+
+    PAGE = st.selectbox("Page", menu)
+
+# Normalize to internal page keys (strip emoji/prefix)
+PAGE_KEY = re.sub(r"^[^A-Za-z0-9]+\s*", "", PAGE).strip()
+
+# Selected lead/property hash for Lead 360 panels (Interactions/Tasks/History)
+if "active_pid" not in st.session_state:
+    st.session_state["active_pid"] = ""
+
+pid = st.session_state["active_pid"]
+
+# =========================================================
+# LOAD LEADS (CACHED PREP) + CODES ONLY WHEN FILE CHANGES
+# =========================================================
+leads_df, leads_version = read_leads_file(upload)
+
+# If we already processed codes for this same leads file, reuse from session
+if st.session_state.get("leads_version") != leads_version:
+    st.session_state["leads_version"] = leads_version
+    st.session_state.pop("codes_df", None)
+    st.session_state.pop("disp_map", None)
+    st.session_state.pop("pid_to_code", None)
+
+if "codes_df" not in st.session_state:
+    codes_df = ensure_property_codes(leads_df)
+    st.session_state["codes_df"] = codes_df
+    st.session_state["disp_map"] = property_display_map(codes_df, leads_df)
+    st.session_state["pid_to_code"] = dict(zip(codes_df["property_id"].astype("string"), codes_df["property_code"].astype("string")))
+
+codes_df = st.session_state["codes_df"]
+disp_map = st.session_state["disp_map"]
+pid_to_code = st.session_state["pid_to_code"]
+
+# Lead updates (cached)
+upd = list_lead_updates(SECTION)
+leads_df = leads_df.merge(upd, left_on="__hash", right_on="record_hash", how="left")
+
+for c, default in [("status", "New"), ("assigned_to", ""), ("lead_source", "Cold Call"), ("notes", ""), ("follow_up", "")]:
+    leads_df[c] = leads_df[c].fillna(default)
+
+# field/viewer: only own assigned
+if ROLE in [ROLE_INSTALL_FIELD, ROLE_ADS_FIELD, ROLE_VIEWER]:
+    leads_df = leads_df[leads_df["assigned_to"].astype("string") == USER]
+
+# KPI sticky header
+st.markdown("<div class='sticky-wrap'>", unsafe_allow_html=True)
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    kpi("Leads", f"{len(leads_df):,}")
+with c2:
+    kpi("New", f"{int((leads_df['status'] == 'New').sum()):,}")
+with c3:
+    kpi("Follow-up", f"{int((leads_df['status'] == 'Follow-up Required').sum()):,}")
+with c4:
+    kpi("Interested", f"{int((leads_df['status'] == 'Interested').sum()):,}")
+st.markdown("</div>", unsafe_allow_html=True)
+# =========================================================
+# UI PAGES (Commit 2)
+# =========================================================
+
+def page_home():
+    page_title("Home", "Fast global search + quick actions")
+    if gq and gq.strip():
+        res = global_search(gq.strip())
+        if not res:
+            st.info("No results.")
+            return
+        for title, df in res.items():
+            st.markdown(f"### {title}")
+            st.dataframe(df, use_container_width=True)
+    else:
+        st.info("Use the Global Search (left) to search across modules.")
+
+def page_management_dashboard():
+    page_title("Management Dashboard", "High-level view for decision making")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        kpi("Total Leads", f"{len(leads_df):,}")
+    with c2:
+        kpi("Interested", f"{int((leads_df['status'] == 'Interested').sum()):,}")
+    with c3:
+        kpi("Follow-up Required", f"{int((leads_df['status'] == 'Follow-up Required').sum()):,}")
+
+    st.markdown("### Status distribution")
+    # Streamlit-native chart (safe)
+    status_counts = leads_df["status"].value_counts(dropna=False).reset_index()
+    status_counts.columns = ["status", "count"]
+    st.bar_chart(status_counts.set_index("status"))
+
+def page_leads_pipeline():
+    page_title("Leads Pipeline", "Filter + update lead status (fast)")
+    # Basic filters (extend later)
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        q = st.text_input("Search (name/address/city/mobile/email)", "")
+    with f2:
+        st_filter = st.multiselect("Status", LEAD_STATUS, default=[])
+    with f3:
+        assignee = st.text_input("Assigned to (username contains)", "")
+
+    df = leads_df.copy()
+
+    if q.strip():
+        qq = q.strip().lower()
+        df = df[df["__search"].astype("string").str.contains(qq, na=False)]
+
+    if st_filter:
+        df = df[df["status"].isin(st_filter)]
+
+    if assignee.strip():
+        df = df[df["assigned_to"].astype("string").str.contains(assignee.strip(), case=False, na=False)]
+
+    st.caption(f"Showing {len(df):,} lead(s)")
+
+    show_cols = [
+        "District","City","Property Name","Property Address",
+        "Promoter / Developer Name","Promoter Mobile Number","Promoter Email",
+        "status","assigned_to","lead_source","follow_up","notes"
+    ]
+    for c in show_cols:
+        if c not in df.columns:
+            df[c] = ""
+
+    st.dataframe(df[show_cols], use_container_width=True, height=520)
+
+    st.markdown("### Update a lead")
+    pid_list = df["__hash"].astype("string").dropna().unique().tolist()
+    if not pid_list:
+        st.info("No leads available to update with the current filters.")
+        return
+
+    pick = st.selectbox("Select lead (record hash)", pid_list)
+    row = df[df["__hash"].astype("string") == str(pick)].head(1)
+    if len(row):
+        st.write("**Selected:**", row.iloc[0].get("Property Name", ""), "|", row.iloc[0].get("City", ""))
+
+    with st.form("lead_update_form"):
+        new_status = st.selectbox("Status", LEAD_STATUS, index=LEAD_STATUS.index("New") if "New" in LEAD_STATUS else 0)
+        assigned_to = st.text_input("Assign to (username)", value=str(row.iloc[0].get("assigned_to","") if len(row) else ""))
+        lead_source = st.text_input("Lead source", value=str(row.iloc[0].get("lead_source","Cold Call") if len(row) else "Cold Call"))
+        notes = st.text_area("Notes", value=str(row.iloc[0].get("notes","") if len(row) else ""))
+        follow_up = st.text_input("Follow-up (date/remark)", value=str(row.iloc[0].get("follow_up","") if len(row) else ""))
+        last_call_outcome = st.selectbox("Last call outcome (optional)", ["", *CALL_OUTCOMES], index=0)
+        ok = st.form_submit_button("Save update", type="primary")
+
+    if ok:
+        upsert_lead_update(
+            SECTION, str(pick), new_status, assigned_to.strip(), lead_source.strip(),
+            notes.strip(), follow_up.strip(),
+            last_call_outcome=(last_call_outcome or None),
+            username=USER
+        )
+        st.success("Saved.")
+        st.session_state["active_pid"] = str(pick)
+        st.rerun()
+
+def page_inventory_sites():
+    page_title("Inventory (Sites)", "Master sites inventory")
+    df = qdf("""SELECT property_id, property_code, district, city, property_name, property_address,
+                      contact_person, contact_details, no_screens_installed, agreed_rent_pm, last_updated
+               FROM inventory_sites
+               ORDER BY last_updated DESC
+               LIMIT 500""")
+    st.dataframe(df, use_container_width=True)
+
+def page_screens():
+    page_title("Screens", "Installed screens + service info")
+    df = qdf("""SELECT s.screen_id, s.property_id, i.property_name, i.city,
+                      s.screen_location, s.installed_date, s.last_service_date,
+                      s.next_service_due, s.is_active, s.last_updated
+               FROM screens s
+               LEFT JOIN inventory_sites i ON i.property_id = s.property_id
+               ORDER BY s.last_updated DESC
+               LIMIT 500""")
+    st.dataframe(df, use_container_width=True)
+
+def page_documents_vault():
+    page_title("Documents Vault", "Upload and track docs (NOC, agreements, photos, etc.)")
+    df = qdf("""SELECT doc_id, section, property_id, doc_type, filename, issue_date, expiry_date, uploaded_by, uploaded_at
+               FROM documents_vault
+               ORDER BY uploaded_at DESC
+               LIMIT 500""")
+    st.dataframe(df, use_container_width=True)
+
+def page_map_view():
+    page_title("Map View", "Open property location in Google Maps")
+    st.info("This page opens Google Maps search links from your selected lead.")
+    if not pid:
+        st.warning("Select a lead first (save a lead update, or set active lead).")
+        return
+    sel = leads_df[leads_df["__hash"].astype("string") == str(pid)].head(1)
+    if len(sel) == 0:
+        st.warning("Active lead not found in current filtered dataset.")
+        return
+    r = sel.iloc[0]
+    url = google_maps_url(str(r.get("Property Name","")), str(r.get("Property Address","")))
+    st.link_button("Open in Google Maps", url)
+
+def page_proposals():
+    page_title("Proposals", "Generate and download system PDFs")
+    st.caption("Proposal generation uses ReportLab and stores PDFs in uploads_docs.")
+    st.info("Wire this page to your proposals table + generate buttons (already available in code).")
+
+def page_whatsapp():
+    page_title("WhatsApp", "Click-to-chat")
+    st.info("This page should build WhatsApp links from selected lead or from filtered lead table.")
+
+def page_reports():
+    page_title("Reports", "Exports + operational summaries")
+    st.info("Add exports here (CSV/PDF) based on section & filters.")
+
+def page_admin_panel():
+    page_title("Admin Panel", "Users + permissions + system settings")
+    if ROLE != ROLE_SUPER_ADMIN:
+        st.error("Access denied.")
+        return
+    st.info("Add user creation, role assignment, permission controls, etc.")
+
+def render_page(page_key: str):
+    # Normalize the same way your code does (PAGE_KEY already normalized)
+    routes = {
+        "Home": page_home,
+        "Management Dashboard": page_management_dashboard,
+        "Leads Pipeline": page_leads_pipeline,
+        "Inventory (Sites)": page_inventory_sites,
+        "Screens": page_screens,
+        "Documents Vault": page_documents_vault,
+        "Map View": page_map_view,
+        "Proposals": page_proposals,
+        "WhatsApp": page_whatsapp,
+        "Reports": page_reports,
+        "Admin Panel": page_admin_panel,
+    }
+
+    fn = routes.get(page_key)
+    if fn is None:
+        st.warning(f"Page not implemented yet: {page_key}")
+        return
+    fn()
+
+# ---- Call the router ----
+render_page(PAGE_KEY)
+st.stop()
+# =========================================================
+# UTILS
+# =========================================================
+
+def google_maps_url(property_name: str, address: str) -> str:
+    q = f"{property_name} {address}".strip()
+    return "https://www.google.com/maps/search/?api=1&query=" + quote_plus(q)
+
+def tel_url(mobile: str) -> str:
+    m = re.sub(r"[^0-9+]", "", str(mobile or ""))
+    return f"tel:{m}"
+
+def mailto_url(email: str, subject: str = "", body: str = "") -> str:
+    email = str(email or "").strip()
+    return f"mailto:{email}?subject={quote_plus(subject)}&body={quote_plus(body)}"
+
+def normalize_mobile(x: str) -> str:
+    x = re.sub(r"[^0-9+]", "", str(x or ""))
+    x = x.replace("+91", "")
+    if x.startswith("0") and len(x) > 10:
+        x = x.lstrip("0")
+    return x
+
+def make_hash(*parts: str) -> str:
+    s = "|".join([str(p or "").strip().lower() for p in parts])
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+
+def whatsapp_url(mobile, message):
+    m = str(mobile or "")
+    m = re.sub(r"[^0-9]", "", m)
+    if len(m) > 10:
+        m = m[-10:]
+    if not m:
+        return "#"
+    return f"https://wa.me/91{m}?text={quote_plus(message)}"
+
+
+def safe_df_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    out = df.copy()
+    for c in cols:
+        if c not in out.columns:
+            out[c] = ""
+    return out
+
+
+
+
 # =========================================================
 # CENTRAL ACCESS CONTROL (Scope + Role + Assignment)
 # =========================================================
@@ -2573,9 +2927,6 @@ def render_page(page_key: str):
         return
     fn()
 
-# ---- Call the router ----
-render_page(PAGE_KEY)
-st.stop()
 # =========================================================
 # UTILS
 # =========================================================
@@ -2624,6 +2975,11 @@ def safe_df_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 # =========================================================
 # PAGES
 # =========================================================
+if PAGE_KEY == "Admin Panel":
+    require_module_access(SECTION)  # scope check
+    page_admin_panel()
+    st.stop()
+
 if PAGE_KEY == "Home":
     page_title("🏠 Home (Fast Search)", f"{SECTION}: Search properties quickly (optimized).")
 
