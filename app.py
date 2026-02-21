@@ -513,31 +513,58 @@ def init_db_once():
     exec_sql("CREATE INDEX IF NOT EXISTS idx_payments_due ON payments(section, due_date)")
     exec_sql("CREATE INDEX IF NOT EXISTS idx_docs_vault_prop ON documents_vault(property_id)")
 
-    # --- Seed permissions if empty ---
-    c = int(qdf("SELECT COUNT(*) AS c FROM permissions").iloc[0]["c"] or 0)
-    if c == 0:
-        seed = [
-            ("Super Admin", "*", 1, 1, 1, 1, 1),
-            ("Head Ops", "*", 1, 1, 1, 0, 1),
-            ("Installation Manager", "Installation", 1, 1, 1, 0, 1),
-            ("Advertisement Manager", "Advertisement", 1, 1, 1, 0, 1),
-            ("Field Team (Installation)", "Installation", 1, 1, 1, 0, 0),
-            ("Field Team (Advertisement)", "Advertisement", 1, 1, 1, 0, 0),
-            ("Viewer", "*", 1, 0, 0, 0, 0),
-        ]
-        for role, sec, v, a, e, d, x in seed:
-            exec_sql("""
-            INSERT INTO permissions(role, section, can_view, can_add, can_edit, can_delete, can_export)
-            VALUES(:r,:s,:v,:a,:e,:d,:x)
-            """, {"r": role, "s": sec, "v": v, "a": a, "e": e, "d": d, "x": x})
+# --- Seed permissions if empty ---
+c = int(qdf("SELECT COUNT(*) AS c FROM permissions").iloc[0]["c"] or 0)
+if c == 0:
+    seed = [
+        (ROLE_SUPERADMIN, "*", 1, 1, 1, 1, 1),
+        (ROLE_HEAD, "*", 1, 1, 1, 0, 1),
+        (ROLE_INSTALL_MGR, "Installation", 1, 1, 1, 0, 1),
+        (ROLE_ADS_MGR, "Advertisement", 1, 1, 1, 0, 1),
+        (ROLE_INSTALL_FIELD, "Installation", 1, 1, 1, 0, 0),
+        (ROLE_ADS_FIELD, "Advertisement", 1, 1, 1, 0, 0),
+        (ROLE_VIEWER, "*", 1, 0, 0, 0, 0),
+        (ROLE_EXECUTIVE, "*", 1, 0, 0, 0, 1),  # Added missing executive role
+    ]
+    for role, sec, v, a, e, d, x in seed:
+        exec_sql("""
+        INSERT INTO permissions(role, section, can_view, can_add, can_edit, can_delete, can_export)
+        VALUES(:r,:s,:v,:a,:e,:d,:x)
+        """, {"r": role, "s": sec, "v": v, "a": a, "e": e, "d": d, "x": x})
+# --- Additional tables (safe create) ---
+exec_sql("""
+CREATE TABLE IF NOT EXISTS company_settings(
+  settings_id TEXT PRIMARY KEY,
+  gst_no TEXT DEFAULT '',
+  bank_details TEXT DEFAULT '',
+  whatsapp_limit_per_hour INTEGER DEFAULT 50,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
 
-    return True
+exec_sql("""
+CREATE TABLE IF NOT EXISTS user_profiles(
+  username TEXT PRIMARY KEY,
+  signature_filename TEXT DEFAULT '',
+  designation TEXT DEFAULT '',
+  mobile TEXT DEFAULT '',
+  email TEXT DEFAULT '',
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
 
-
-# ✅ Run DB init once per server
-init_db_once()
-
-
+exec_sql("""
+CREATE TABLE IF NOT EXISTS proposals(
+  proposal_id TEXT PRIMARY KEY,
+  section TEXT NOT NULL,
+  property_id TEXT,
+  proposal_no INTEGER,
+  created_by TEXT,
+  pdf_filename TEXT,
+  status TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
 # =========================================================
 # AUTH
 # =========================================================
