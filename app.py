@@ -212,26 +212,29 @@ def db_engine():
     parsed = urlparse(url)
     host = parsed.hostname or ""
 
-    # Force IPv4 (fixes: Cannot assign requested address on IPv6-only resolution)
+    # Force IPv4 (fixes IPv6 routing issues on some hosts)
     ipv4 = _resolve_ipv4(host)
+
+    # ✅ PgBouncer/Supabase pooler stability: disable prepared statements
     connect_args = {
         "connect_timeout": 10,
-        "prepare_threshold": 0,   # IMPORTANT for Supabase pooler / PgBouncer stability
-        "statement_cache_size": 0,  # avoid prepared stmt caching with PgBouncer
+        "prepare_threshold": 0,
     }
     if ipv4:
-        connect_args["hostaddr"] = ipv4  # psycopg/libpq will use this instead of IPv6
+        connect_args["hostaddr"] = ipv4
 
     try:
         eng = create_engine(
             url,
             pool_pre_ping=True,
-            poolclass=NullPool,     # safest for serverless + pooler
+            poolclass=NullPool,   # safest with Supabase Pooler/PgBouncer
             connect_args=connect_args,
         )
+
         # smoke test
         with eng.connect() as conn:
             conn.execute(text("SELECT 1"))
+
         return eng
 
     except Exception as e:
