@@ -298,10 +298,7 @@ def column_exists(table_name: str, column_name: str) -> bool:
 # =========================================================
 # MIGRATIONS + SEED (RUN ONCE PER SERVER)
 # =========================================================
-@st.cache_resource(show_spinner=False)
-if "db_bootstrapped" not in st.session_state:
-    init_db_once()
-    st.session_state["db_bootstrapped"] = True
+def migrate_and_seed():
     # tables
     exec_sql("""
     CREATE TABLE IF NOT EXISTS users(
@@ -310,10 +307,11 @@ if "db_bootstrapped" not in st.session_state:
       role TEXT NOT NULL,
       section_scope TEXT NOT NULL DEFAULT 'Both',
       is_active INTEGER NOT NULL DEFAULT 1,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW(),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       last_login_at TIMESTAMP
-    )""")
+    )
+    """)
 
     exec_sql("""
     CREATE TABLE IF NOT EXISTS permissions(
@@ -325,8 +323,9 @@ if "db_bootstrapped" not in st.session_state:
       can_edit INTEGER NOT NULL DEFAULT 0,
       can_delete INTEGER NOT NULL DEFAULT 0,
       can_export INTEGER NOT NULL DEFAULT 0,
-      updated_at TIMESTAMP DEFAULT NOW()
-    )""")
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
     exec_sql("""
     CREATE TABLE IF NOT EXISTS audit_logs(
@@ -334,8 +333,9 @@ if "db_bootstrapped" not in st.session_state:
       username TEXT,
       action_type TEXT,
       details TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )""")
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
     exec_sql("""
     CREATE TABLE IF NOT EXISTS property_codes(
@@ -344,8 +344,9 @@ if "db_bootstrapped" not in st.session_state:
       district TEXT,
       city TEXT,
       property_name TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )""")
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
     exec_sql("""
     CREATE TABLE IF NOT EXISTS lead_updates(
@@ -358,9 +359,10 @@ if "db_bootstrapped" not in st.session_state:
       follow_up TEXT,
       last_call_outcome TEXT,
       last_call_at TIMESTAMP,
-      last_updated TIMESTAMP DEFAULT NOW(),
+      last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY(record_hash, section)
-    )""")
+    )
+    """)
 
     exec_sql("""
     CREATE TABLE IF NOT EXISTS inventory_sites(
@@ -383,9 +385,17 @@ if "db_bootstrapped" not in st.session_state:
       no_screens_installed INTEGER DEFAULT 0,
       agreed_rent_pm DOUBLE PRECISION,
       notes TEXT,
-      last_updated TIMESTAMP DEFAULT NOW()
-    )""")
+      last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
 
+@st.cache_resource(show_spinner=False)
+def init_db_once_cached():
+    migrate_and_seed()
+    return True
+
+# Run once per server
+init_db_once_cached()
     
     # ---- AIAMS Management Upgrade (safe additions) ----
     # Add optional management fields to inventory_sites (won't break existing rows)
