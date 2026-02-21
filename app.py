@@ -660,6 +660,413 @@ init_db_once()
 
 
 # =========================================================
+
+# =========================================================
+# PORTED HELPERS FROM v7 -> 5.03 (SUPABASE SAFE)
+# (Commit: helpers only; no UI changes)
+# =========================================================
+
+def _empty_df() -> pd.DataFrame:
+    return pd.DataFrame()
+
+def _safe_table(table: str) -> bool:
+    try:
+        return table_exists(table)
+    except Exception:
+        return False
+
+def norm(x):
+    if x is None:
+        return ""
+    return str(x).strip()
+
+def save_upload(upload, subdir: str, prefix: str, property_code: str = "") -> tuple[str, str]:
+    """Save uploaded file locally (Streamlit Cloud: ephemeral). Returns (filename, storage_path)."""
+    if not upload:
+        return ("", "")
+    try:
+        name = getattr(upload, "name", "upload.bin")
+        ext = name.split(".")[-1].lower() if "." in name else "bin"
+    except Exception:
+        ext = "bin"
+
+    safe_code = re.sub(r"[^A-Za-z0-9_\-]", "_", (property_code or "PROP"))[:20]
+    safe_prefix = re.sub(r"[^A-Za-z0-9_\-]", "_", (prefix or "DOC"))[:30]
+    fname = f"{safe_code}_{safe_prefix}_{uuid.uuid4().hex}.{ext}"
+
+    root = Path("uploads_docs") / subdir
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / fname
+    with open(path, "wb") as fp:
+        fp.write(upload.getbuffer())
+
+    return fname, str(path)
+
+# -----------------------------
+# USERS
+# -----------------------------
+def list_users() -> pd.DataFrame:
+    if not _safe_table("users"):
+        return _empty_df()
+    return qdf(
+        """SELECT username, role, section_scope, is_active, created_at, updated_at, last_login_at
+           FROM users
+           ORDER BY username"""
+    )
+
+# -----------------------------
+# MANUAL LEADS
+# -----------------------------
+def list_manual_leads(section: str | None = None) -> pd.DataFrame:
+    if not _safe_table("manual_leads"):
+        return _empty_df()
+    if section:
+        return qdf(
+            """SELECT * FROM manual_leads
+               WHERE section = :s
+               ORDER BY created_at DESC""",
+            {"s": section},
+        )
+    return qdf("SELECT * FROM manual_leads ORDER BY created_at DESC")
+
+def insert_manual_lead(payload: dict) -> None:
+    if not _safe_table("manual_leads"):
+        st.error("manual_leads table not found. Run DB migration/init_db_once.")
+        return
+    exec_sql(
+        """INSERT INTO manual_leads(
+              lead_id, section, district, city, property_name, property_address,
+              promoter_name, promoter_mobile, promoter_email, property_type, property_status,
+              notes, created_by, created_at, updated_at
+            )
+            VALUES(
+              :lead_id, :section, :district, :city, :property_name, :property_address,
+              :promoter_name, :promoter_mobile, :promoter_email, :property_type, :property_status,
+              :notes, :created_by, NOW(), NOW()
+            )""",
+        {
+            "lead_id": payload.get("lead_id") or str(uuid.uuid4()),
+            "section": payload.get("section", "Both"),
+            "district": payload.get("district", ""),
+            "city": payload.get("city", ""),
+            "property_name": payload.get("property_name", ""),
+            "property_address": payload.get("property_address", ""),
+            "promoter_name": payload.get("promoter_name", ""),
+            "promoter_mobile": payload.get("promoter_mobile", ""),
+            "promoter_email": payload.get("promoter_email", ""),
+            "property_type": payload.get("property_type", ""),
+            "property_status": payload.get("property_status", ""),
+            "notes": payload.get("notes", ""),
+            "created_by": payload.get("created_by", ""),
+        },
+    )
+
+# -----------------------------
+# INVENTORY + SCREENS
+# -----------------------------
+def list_inventory(limit: int = 500) -> pd.DataFrame:
+    if not _safe_table("inventory_sites"):
+        return _empty_df()
+    return qdf(
+        f"""SELECT *
+           FROM inventory_sites
+           ORDER BY last_updated DESC
+           LIMIT {int(limit)}"""
+    )
+
+def list_screens(property_id: str | None = None, limit: int = 500) -> pd.DataFrame:
+    if not _safe_table("screens"):
+        return _empty_df()
+    if property_id:
+        return qdf(
+            f"""SELECT *
+               FROM screens
+               WHERE property_id = :pid
+               ORDER BY last_updated DESC
+               LIMIT {int(limit)}""",
+            {"pid": property_id},
+        )
+    return qdf(
+        f"""SELECT *
+           FROM screens
+           ORDER BY last_updated DESC
+           LIMIT {int(limit)}"""
+    )
+
+def update_inventory_screen_count(property_id: str) -> None:
+    if not (_safe_table("screens") and _safe_table("inventory_sites")):
+        return
+    df = qdf("SELECT COUNT(*) AS c FROM screens WHERE property_id = :pid", {"pid": property_id})
+    cnt = int(df.iloc[0]["c"] or 0) if len(df) else 0
+    exec_sql(
+        """UPDATE inventory_sites
+           SET no_screens_installed = :c,
+               last_updated = NOW()
+           WHERE property_id = :pid""",
+        {"c": cnt, "pid": property_id},
+    )
+
+def upsert_inventory(site: dict) -> None:
+    if not _safe_table("inventory_sites"):
+        st.error("inventory_sites table not found. Run DB migration/init_db_once.")
+        return
+    if not site.get("property_id"):
+        st.error("property_id is required for upsert_inventory().")
+        return
+
+    exec_sql(
+        """INSERT INTO inventory_sites(
+              property_id, property_code, district, city, property_name, property_address,
+              latitude, longitude, date_of_contract, contract_period, screen_installed_date,
+              contract_terms, site_rating, chairman_name, contact_person, contact_details,
+              agreed_rent_pm, notes, last_updated
+            )
+            VALUES(
+              :property_id, :property_code, :district, :city, :property_name, :property_address,
+              :latitude, :longitude, :date_of_contract, :contract_period, :screen_installed_date,
+              :contract_terms, :site_rating, :chairman_name, :contact_person, :contact_details,
+              :agreed_rent_pm, :notes, NOW()
+            )
+            ON CONFLICT(property_id) DO UPDATE SET
+              property_code = EXCLUDED.property_code,
+              district = EXCLUDED.district,
+              city = EXCLUDED.city,
+              property_name = EXCLUDED.property_name,
+              property_address = EXCLUDED.property_address,
+              latitude = EXCLUDED.latitude,
+              longitude = EXCLUDED.longitude,
+              date_of_contract = EXCLUDED.date_of_contract,
+              contract_period = EXCLUDED.contract_period,
+              screen_installed_date = EXCLUDED.screen_installed_date,
+              contract_terms = EXCLUDED.contract_terms,
+              site_rating = EXCLUDED.site_rating,
+              chairman_name = EXCLUDED.chairman_name,
+              contact_person = EXCLUDED.contact_person,
+              contact_details = EXCLUDED.contact_details,
+              agreed_rent_pm = EXCLUDED.agreed_rent_pm,
+              notes = EXCLUDED.notes,
+              last_updated = NOW()""",
+        {
+            "property_id": site["property_id"],
+            "property_code": site.get("property_code"),
+            "district": site.get("district", ""),
+            "city": site.get("city", ""),
+            "property_name": site.get("property_name", ""),
+            "property_address": site.get("property_address", ""),
+            "latitude": site.get("latitude"),
+            "longitude": site.get("longitude"),
+            "date_of_contract": site.get("date_of_contract", ""),
+            "contract_period": site.get("contract_period", ""),
+            "screen_installed_date": site.get("screen_installed_date", ""),
+            "contract_terms": site.get("contract_terms", ""),
+            "site_rating": site.get("site_rating"),
+            "chairman_name": site.get("chairman_name", ""),
+            "contact_person": site.get("contact_person", ""),
+            "contact_details": site.get("contact_details", ""),
+            "agreed_rent_pm": site.get("agreed_rent_pm"),
+            "notes": site.get("notes", ""),
+        },
+    )
+
+def upsert_screen(s: dict) -> None:
+    if not _safe_table("screens"):
+        st.error("screens table not found. Run DB migration/init_db_once.")
+        return
+    if not s.get("screen_id") or not s.get("property_id"):
+        st.error("screen_id and property_id are required for upsert_screen().")
+        return
+
+    exec_sql(
+        """INSERT INTO screens(
+              screen_id, property_id, screen_location,
+              installed_date, installed_by, last_service_date, next_service_due,
+              is_active, last_updated
+            )
+            VALUES(
+              :screen_id, :property_id, :screen_location,
+              :installed_date, :installed_by, :last_service_date, :next_service_due,
+              :is_active, NOW()
+            )
+            ON CONFLICT(screen_id) DO UPDATE SET
+              property_id = EXCLUDED.property_id,
+              screen_location = EXCLUDED.screen_location,
+              installed_date = EXCLUDED.installed_date,
+              installed_by = EXCLUDED.installed_by,
+              last_service_date = EXCLUDED.last_service_date,
+              next_service_due = EXCLUDED.next_service_due,
+              is_active = EXCLUDED.is_active,
+              last_updated = NOW()""",
+        {
+            "screen_id": s["screen_id"],
+            "property_id": s["property_id"],
+            "screen_location": s.get("screen_location", ""),
+            "installed_date": s.get("installed_date", ""),
+            "installed_by": s.get("installed_by", ""),
+            "last_service_date": s.get("last_service_date", ""),
+            "next_service_due": s.get("next_service_due", ""),
+            "is_active": int(s.get("is_active", 1) or 1),
+        },
+    )
+    update_inventory_screen_count(s["property_id"])
+
+def mark_serviced(screen_id: str, last_service_date: str, next_due_date: str) -> None:
+    if not _safe_table("screens"):
+        return
+    exec_sql(
+        """UPDATE screens
+           SET last_service_date = :ls,
+               next_service_due = :nd,
+               last_updated = NOW()
+           WHERE screen_id = :sid""",
+        {"ls": str(last_service_date), "nd": str(next_due_date), "sid": screen_id},
+    )
+
+# -----------------------------
+# AGREEMENTS + PAYMENTS
+# -----------------------------
+def list_agreements(property_id: str | None = None, limit: int = 500) -> pd.DataFrame:
+    if not _safe_table("agreements"):
+        return _empty_df()
+    if property_id:
+        return qdf(
+            f"""SELECT *
+               FROM agreements
+               WHERE property_id = :pid
+               ORDER BY updated_at DESC
+               LIMIT {int(limit)}""",
+            {"pid": property_id},
+        )
+    return qdf(f"SELECT * FROM agreements ORDER BY updated_at DESC LIMIT {int(limit)}")
+
+def add_agreement(a: dict) -> None:
+    if not _safe_table("agreements"):
+        st.error("agreements table not found. Run DB migration/init_db_once.")
+        return
+    exec_sql(
+        """INSERT INTO agreements(
+              agreement_id, section, property_id, property_code, party_name,
+              start_date, end_date, renewal_type, rent_pm, billing_cycle,
+              status, notes, created_by, created_at, updated_at
+            )
+            VALUES(
+              :agreement_id, :section, :property_id, :property_code, :party_name,
+              :start_date, :end_date, :renewal_type, :rent_pm, :billing_cycle,
+              :status, :notes, :created_by, NOW(), NOW()
+            )""",
+        {
+            "agreement_id": a.get("agreement_id") or str(uuid.uuid4()),
+            "section": a.get("section", "Both"),
+            "property_id": a.get("property_id"),
+            "property_code": a.get("property_code"),
+            "party_name": a.get("party_name", ""),
+            "start_date": a.get("start_date", ""),
+            "end_date": a.get("end_date", ""),
+            "renewal_type": a.get("renewal_type", ""),
+            "rent_pm": a.get("rent_pm"),
+            "billing_cycle": a.get("billing_cycle", ""),
+            "status": a.get("status", ""),
+            "notes": a.get("notes", ""),
+            "created_by": a.get("created_by", ""),
+        },
+    )
+
+def list_payments(limit: int = 800) -> pd.DataFrame:
+    if not _safe_table("payments"):
+        return _empty_df()
+    return qdf(f"SELECT * FROM payments ORDER BY created_at DESC LIMIT {int(limit)}")
+
+def add_payment(p: dict) -> None:
+    if not _safe_table("payments"):
+        st.error("payments table not found. Run DB migration/init_db_once.")
+        return
+    exec_sql(
+        """INSERT INTO payments(
+              payment_id, agreement_id, section, property_id,
+              due_date, amount, status, paid_date,
+              payment_mode, reference_no, notes, created_by, created_at
+            )
+            VALUES(
+              :payment_id, :agreement_id, :section, :property_id,
+              :due_date, :amount, :status, :paid_date,
+              :payment_mode, :reference_no, :notes, :created_by, NOW()
+            )""",
+        {
+            "payment_id": p.get("payment_id") or str(uuid.uuid4()),
+            "agreement_id": p.get("agreement_id"),
+            "section": p.get("section", "Both"),
+            "property_id": p.get("property_id"),
+            "due_date": p.get("due_date", ""),
+            "amount": p.get("amount"),
+            "status": p.get("status", "Due"),
+            "paid_date": p.get("paid_date", ""),
+            "payment_mode": p.get("payment_mode", ""),
+            "reference_no": p.get("reference_no", ""),
+            "notes": p.get("notes", ""),
+            "created_by": p.get("created_by", ""),
+        },
+    )
+
+# -----------------------------
+# DOCUMENTS VAULT
+# -----------------------------
+def list_documents(property_id: str | None = None, limit: int = 800) -> pd.DataFrame:
+    if not _safe_table("documents_vault"):
+        return _empty_df()
+    if property_id:
+        return qdf(
+            f"""SELECT *
+               FROM documents_vault
+               WHERE property_id = :pid
+               ORDER BY uploaded_at DESC
+               LIMIT {int(limit)}""",
+            {"pid": property_id},
+        )
+    return qdf(f"SELECT * FROM documents_vault ORDER BY uploaded_at DESC LIMIT {int(limit)}")
+
+def add_document(row: dict) -> None:
+    if not _safe_table("documents_vault"):
+        st.error("documents_vault table not found. Run DB migration/init_db_once.")
+        return
+    exec_sql(
+        """INSERT INTO documents_vault(
+              doc_id, section, property_id, doc_type,
+              filename, storage_path, issue_date, expiry_date,
+              uploaded_by, uploaded_at
+            )
+            VALUES(
+              :doc_id, :section, :property_id, :doc_type,
+              :filename, :storage_path, :issue_date, :expiry_date,
+              :uploaded_by, NOW()
+            )""",
+        {
+            "doc_id": row.get("doc_id") or str(uuid.uuid4()),
+            "section": row.get("section", "Both"),
+            "property_id": row.get("property_id"),
+            "doc_type": row.get("doc_type", "Other"),
+            "filename": row.get("filename", ""),
+            "storage_path": row.get("storage_path", ""),
+            "issue_date": row.get("issue_date", ""),
+            "expiry_date": row.get("expiry_date", ""),
+            "uploaded_by": row.get("uploaded_by", ""),
+        },
+    )
+
+def prop_status(property_id: str) -> str:
+    """Best-effort availability helper (adjust statuses as per your agreements)."""
+    if not _safe_table("agreements"):
+        return "Available"
+    agr = qdf(
+        """SELECT end_date, status
+           FROM agreements
+           WHERE property_id = :pid""",
+        {"pid": property_id},
+    )
+    if len(agr) == 0:
+        return "Available"
+    active = agr[agr["status"].astype("string").str.lower() == "active"]
+    return "Active" if len(active) else "Available"
+
+
 # AUTH
 # =========================================================
 def pbkdf2_hash(password: str, salt: str | None = None) -> str:
