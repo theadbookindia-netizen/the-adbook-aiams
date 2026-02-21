@@ -1402,7 +1402,69 @@ USER = AUTH["user"]
 ROLE = canonical_role(AUTH["role"], AUTH.get("scope"))
 SCOPE = AUTH.get("scope", SCOPE_BOTH)
 
+# =========================================================
+# MODULE ACCESS CONTROL (Server-side)
+# =========================================================
 
+def role_to_scope(role: str) -> str:
+    """
+    Enforce module scope from role.
+    Only SUPER_ADMIN and MARKETING_HEAD can be Both.
+    """
+    role = (role or "").strip().upper()
+
+    if role in ["SUPER_ADMIN", "MARKETING_HEAD"]:
+        return "Both"
+
+    if role.startswith("INSTALLATION_") or role in [
+        "VIEWER_INSTALLATION",
+        "INSTALLATION_MANAGER",
+    ]:
+        return "Installation"
+
+    if role.startswith("ADS_") or role in [
+        "VIEWER_ADS",
+        "ADS_MANAGER",
+    ]:
+        return "Advertisement"
+
+    return ""
+
+
+def require_module_access(section: str):
+    """
+    Block access if user opens page outside allowed module scope.
+    """
+    section = (section or "").strip()
+
+    # Let login flow handle unauthenticated users
+    if "auth" not in st.session_state:
+        return
+
+    if not section:
+        st.error("Access Denied")
+        st.stop()
+
+    auth = st.session_state.get("auth", {})
+
+    role = (auth.get("role") or "").upper()
+    user_scope = (auth.get("scope") or "").title()
+
+    enforced = role_to_scope(role)
+
+    # Enforced role scope always wins
+    scope = enforced if enforced else user_scope
+
+    scope = (scope or "").title()
+    section = section.title()
+
+    if scope not in ["Installation", "Advertisement", "Both"]:
+        st.error("Access Denied")
+        st.stop()
+
+    if scope != "Both" and section != scope:
+        st.error("Access Denied")
+        st.stop()
 # =========================================================
 # SIDEBAR + MENU (Original Layout Preserved)
 # =========================================================
