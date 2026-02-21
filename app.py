@@ -221,7 +221,7 @@ def engine():
 
 def exec_sql(sql: str, params: dict | None = None) -> None:
     try:
-        with engine().begin() as conn:
+        with db_engine().begin() as conn:
             conn.execute(text(sql), params or {})
     except SQLAlchemyError as e:
         st.error("Database error while executing SQL.")
@@ -230,7 +230,7 @@ def exec_sql(sql: str, params: dict | None = None) -> None:
 
 def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
     try:
-        with engine().connect() as conn:
+        with db_engine().connect() as conn:
             return pd.read_sql(text(sql), conn, params=params or {})
     except SQLAlchemyError as e:
         st.error("Database error while reading data.")
@@ -505,41 +505,6 @@ def init_db_once():
     )
     """)
 
-    # --- Additional tables (safe create) ---
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS company_settings(
-      settings_id TEXT PRIMARY KEY,
-      gst_no TEXT DEFAULT '',
-      bank_details TEXT DEFAULT '',
-      whatsapp_limit_per_hour INTEGER DEFAULT 50,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS user_profiles(
-      username TEXT PRIMARY KEY,
-      signature_filename TEXT DEFAULT '',
-      designation TEXT DEFAULT '',
-      mobile TEXT DEFAULT '',
-      email TEXT DEFAULT '',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    exec_sql("""
-    CREATE TABLE IF NOT EXISTS proposals(
-      proposal_id TEXT PRIMARY KEY,
-      section TEXT NOT NULL,
-      property_id TEXT,
-      proposal_no INTEGER,
-      created_by TEXT,
-      pdf_filename TEXT,
-      status TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
     # --- Indexes (safe) ---
     exec_sql("CREATE INDEX IF NOT EXISTS idx_lead_updates_section_updated ON lead_updates(section, last_updated DESC)")
     exec_sql("CREATE INDEX IF NOT EXISTS idx_inventory_search ON inventory_sites(property_code, district, city, property_name)")
@@ -552,14 +517,13 @@ def init_db_once():
     c = int(qdf("SELECT COUNT(*) AS c FROM permissions").iloc[0]["c"] or 0)
     if c == 0:
         seed = [
-            (ROLE_SUPERADMIN, "*", 1, 1, 1, 1, 1),
-            (ROLE_HEAD, "*", 1, 1, 1, 0, 1),
-            (ROLE_INSTALL_MGR, "Installation", 1, 1, 1, 0, 1),
-            (ROLE_ADS_MGR, "Advertisement", 1, 1, 1, 0, 1),
-            (ROLE_INSTALL_FIELD, "Installation", 1, 1, 1, 0, 0),
-            (ROLE_ADS_FIELD, "Advertisement", 1, 1, 1, 0, 0),
-            (ROLE_VIEWER, "*", 1, 0, 0, 0, 0),
-            (ROLE_EXECUTIVE, "*", 1, 0, 0, 0, 1),  # Added missing executive role
+            ("Super Admin", "*", 1, 1, 1, 1, 1),
+            ("Head Ops", "*", 1, 1, 1, 0, 1),
+            ("Installation Manager", "Installation", 1, 1, 1, 0, 1),
+            ("Advertisement Manager", "Advertisement", 1, 1, 1, 0, 1),
+            ("Field Team (Installation)", "Installation", 1, 1, 1, 0, 0),
+            ("Field Team (Advertisement)", "Advertisement", 1, 1, 1, 0, 0),
+            ("Viewer", "*", 1, 0, 0, 0, 0),
         ]
         for role, sec, v, a, e, d, x in seed:
             exec_sql("""
@@ -1059,7 +1023,7 @@ def ensure_property_codes(leads_df: pd.DataFrame, batch_size: int = 700) -> pd.D
 
     inserted = 0
     skipped = 0
-    with engine().begin() as conn:
+    with db_engine().begin() as conn:
         for row in inserts:
             try:
                 conn.execute(sql, row)
@@ -1337,7 +1301,7 @@ with st.sidebar:
     SECTION = st.radio("Module", allowed_sections, horizontal=True)
 
     MENU_INSTALL = ["🏠 Home", "📈 Management Dashboard", "🎯 Installation Opportunities", "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "🗂 Inventory (Sites)", "🖥 Screens", "🛠 Service Center", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "📄 Documents Vault", "🗺 Map View", "📃 Proposals", "💬 WhatsApp", "📊 Reports"]
-    MENU_ADS = ["🏠 Home", "📈 Management Dashboard", "💼 Ads Opportunities", "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "💬 WhatsApp", "📊 Reports"]
+MENU_ADS = ["🏠 Home", "📈 Management Dashboard", "💼 Ads Opportunities", "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "📢 Ad Sales Inventory", "📝 Agreements", "💰 Billing & Reminders", "💬 WhatsApp", "📊 Reports"]
     menu = MENU_INSTALL if SECTION == SECTION_INSTALL else MENU_ADS
     if ROLE == ROLE_SUPERADMIN:
         menu = menu + ["Admin Panel"]
@@ -1425,52 +1389,150 @@ def mailto_url(email: str, subject: str = "", body: str = "") -> str:
     email = str(email or "").strip()
     return f"mailto:{email}?subject={quote_plus(subject)}&body={quote_plus(body)}"
 
+def normalize_mobile(x: str) -> str:
+    x = re.sub(r"[^0-9+]", "", str(x or ""))
+    x = x.replace("+91", "")
+    if x.startswith("0") and len(x) > 10:
+        x = x.lstrip("0")
+    return x
+
+def make_hash(*parts: str) -> str:
+    s = "|".join([str(p or "").strip().lower() for p in parts])
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()
+
+def whatsapp_url(mobile, message):
+    m = str(mobile or "")
+    m = re.sub(r"[^0-9]", "", m)
+    if len(m) > 10:
+        m = m[-10:]
+    if not m:
+        return "#"
+    return f"https://wa.me/91{m}?text={quote_plus(message)}"
+
 
 def safe_df_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    return df[[c for c in cols if c in df.columns]]
+    out = df.copy()
+    for c in cols:
+        if c not in out.columns:
+            out[c] = ""
+    return out
 
 
 # =========================================================
-# HOME (GLOBAL SEARCH + KPI)
+# PAGES
 # =========================================================
 if PAGE_KEY == "Home":
-    page_title("🏠 Home", "Search across all modules and quick KPIs.")
-    results = global_search(gq)
-    if results:
-        for k, v in results.items():
-            with st.expander(k, expanded=True):
-                st.dataframe(v, height=260)
-    else:
-        st.info("Enter a search term above to query across modules.")
+    page_title("🏠 Home (Fast Search)", f"{SECTION}: Search properties quickly (optimized).")
+
+    gq = st.session_state.get("global_search_term", "").strip()
+    if gq:
+        st.markdown("### 🔎 Global Search Results")
+        res = global_search(gq)
+        any_hit = False
+        for mod, df in res.items():
+            if df is None or len(df) == 0:
+                continue
+            any_hit = True
+            with st.expander(f"{mod} — {len(df)} results", expanded=False):
+                st.dataframe(df, use_container_width=True, height=280)
+                if can(SECTION, "export", ROLE):
+                    st.download_button(
+                        f"⬇ Export {mod} (CSV)",
+                        data=df_to_csv_bytes(df),
+                        file_name=f"{mod.replace(' ','_').lower()}_search.csv",
+                        mime="text/csv",
+                    )
+        if not any_hit:
+            st.info("No results found in database modules for this search.")
+        st.markdown("---")
+
+    q = st.text_input("Search (Property / Promoter / Phone / Email)", placeholder="Type and press Enter…")
+    df = leads_df
+
+    if q.strip():
+        s = q.strip().lower()
+        df = df[df["__search"].str.contains(re.escape(s), na=False)]
+
+    st.markdown(f"<span class='badge badge-strong'>Matches: {len(df):,}</span>", unsafe_allow_html=True)
+
+    page_size = st.selectbox("Rows per page", [25, 50, 100, 200, 500], index=2)
+    total_pages = max(1, (len(df) + page_size - 1) // page_size)
+    page_no = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
+
+    start = (page_no - 1) * page_size
+    end = start + page_size
+
+    view_cols = ["District", "City", "Property Name", "Promoter / Developer Name",
+                 "Promoter Mobile Number", "Promoter Email", "status", "assigned_to", "follow_up"]
+    dfv = safe_df_cols(df, view_cols).iloc[start:end]
+    st.dataframe(dfv, use_container_width=True, height=560)
 
 elif PAGE_KEY == "Management Dashboard":
-    page_title("📈 Management Dashboard", "Overview KPIs, charts, and summaries.")
+    page_title("📈 Management Dashboard", "Executive KPIs, coverage, funnel, and revenue snapshot.")
 
-    # Example KPIs (expand as needed)
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        kpi("Installed Sites", qdf("SELECT COUNT(*) FROM inventory_sites WHERE no_screens_installed > 0").iloc[0][0])
-    with k2:
-        kpi("Active Agreements", qdf("SELECT COUNT(*) FROM agreements WHERE status='Active'").iloc[0][0])
-    with k3:
-        kpi("Due Payments", qdf("SELECT COUNT(*) FROM payments WHERE status='Due'").iloc[0][0])
-    with k4:
-        kpi("Service Due", qdf("SELECT COUNT(*) FROM screens WHERE next_service_due <= CURRENT_DATE + INTERVAL '30 days'").iloc[0][0])
+    # KPIs from leads (CSV + lead_updates)
+    total_leads = len(leads_df.drop_duplicates("__hash"))
+    contacted = int((leads_df["status"] == "Contacted").sum())
+    pending = int((leads_df["status"] == "New").sum())
+    installed = int((leads_df["status"] == "Installed").sum())
+    conv = (installed / max(contacted, 1)) * 100.0
 
-    # Placeholder charts (use matplotlib or altair if needed)
-    st.markdown("### Revenue Trend (Placeholder)")
+    # Properties in database (inventory_sites)
+    inv_cnt = int(qdf("SELECT COUNT(*) AS c FROM inventory_sites").iloc[0]["c"] or 0)
+    active_sites = int(qdf("SELECT COUNT(*) AS c FROM inventory_sites WHERE COALESCE(no_screens_installed,0) > 0").iloc[0]["c"] or 0)
+
+    # District-wise count from leads
+    dist = leads_df.groupby("District", dropna=False).size().reset_index(name="properties").sort_values("properties", ascending=False).head(25)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: kpi("Total Leads (file)", f"{total_leads:,}")
+    with c2: kpi("Contacted", f"{contacted:,}")
+    with c3: kpi("Installed", f"{installed:,}")
+    with c4: kpi("Conversion % (Contacted→Installed)", f"{conv:.1f}%")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: kpi("Sites in DB", f"{inv_cnt:,}")
+    with c2: kpi("Active Sites (screens>0)", f"{active_sites:,}")
+    with c3: kpi("Pending (New)", f"{pending:,}")
+    with c4:
+        hi = 0
+        if column_exists("inventory_sites","high_value_flag"):
+            try:
+                hi = int(qdf("SELECT COUNT(*) AS c FROM inventory_sites WHERE COALESCE(high_value_flag,0)=1").iloc[0]["c"] or 0)
+            except Exception:
+                hi = 0
+        kpi("High-Value (flagged)", f"{hi:,}")
+
+    st.markdown("### 🗺 District Coverage (Top 25 by properties)")
+    st.dataframe(dist, use_container_width=True, height=360)
+
+    st.markdown("### 📌 Funnel Snapshot")
+    funnel = pd.DataFrame({
+        "Stage": ["New", "Contacted", "Follow-up Required", "Interested", "Installed", "Rejected/Not Suitable"],
+        "Count": [
+            int((leads_df["status"]=="New").sum()),
+            int((leads_df["status"]=="Contacted").sum()),
+            int((leads_df["status"]=="Follow-up Required").sum()),
+            int((leads_df["status"]=="Interested").sum()),
+            int((leads_df["status"]=="Installed").sum()),
+            int((leads_df["status"]=="Rejected/Not Suitable").sum()),
+        ]
+    })
+    st.dataframe(funnel, use_container_width=True, height=260)
+
+    st.markdown("### 💰 Revenue Snapshot (Agreements + Payments)")
     try:
-        rev = qdf("SELECT due_date, SUM(amount) AS rev FROM payments GROUP BY due_date ORDER BY due_date")
-        st.line_chart(rev.set_index("due_date"))
-    except:
-        st.info("Revenue chart needs payments data.")
-
-    st.markdown("### Top Districts by Installs")
-    try:
-        dist = qdf("SELECT district, COUNT(*) AS installs FROM inventory_sites GROUP BY district ORDER BY installs DESC LIMIT 10")
-        st.bar_chart(dist.set_index("district"))
-    except:
-        st.info("District data not available yet.")
+        agr = qdf("SELECT section, status, COUNT(*) AS agreements, COALESCE(SUM(rent_pm),0) AS rent_sum FROM agreements GROUP BY section, status ORDER BY agreements DESC")
+        pay = qdf("SELECT section, status, COUNT(*) AS bills, COALESCE(SUM(amount),0) AS amount_sum FROM payments GROUP BY section, status ORDER BY bills DESC")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("Agreements")
+            st.dataframe(agr, use_container_width=True, height=260)
+        with c2:
+            st.caption("Billing & Reminders")
+            st.dataframe(pay, use_container_width=True, height=260)
+    except Exception as e:
+        st.info("Revenue tables are available but some fields may be empty yet.")
 
 elif PAGE_KEY == "Installation Opportunities":
     page_title("🎯 Installation Opportunities", "Search and shortlist properties for screen installation.")
@@ -1647,163 +1709,159 @@ elif PAGE_KEY == "Leads Pipeline":
     pid = rev.get(sel, "")
     pid = str(pid) if pid else ""
     st.session_state["active_pid"] = pid
-    filtered_df = df[df["__hash"].astype("string") == pid]
-    if len(filtered_df) == 0:
-        st.warning("Selected lead not found in data. Try refreshing.")
+    row = df[df["__hash"].astype("string") == pid].iloc[0].to_dict()
+
+    st.markdown(f"**{pid_to_code.get(pid, pid[:6])} — {row.get('Property Name','')}**")
+    st.caption(row.get("Property Address", ""))
+
+    c1, c2 = st.columns(2)
+    with c1:
+        status = st.selectbox(
+            "Status",
+            LEAD_STATUS,
+            index=LEAD_STATUS.index(row.get("status", "New")) if row.get("status", "New") in LEAD_STATUS else 0,
+        )
+        assigned = st.text_input("Assigned to", value=row.get("assigned_to", ""))
+    with c2:
+        outcome = st.selectbox("Last call outcome (optional)", [""] + CALL_OUTCOMES, index=0)
+        follow = st.text_input("Follow-up (date/note)", value=row.get("follow_up", ""))
+
+    notes = st.text_area("Notes", value=row.get("notes", ""), height=120)
+
+    save_disabled = not can(SECTION, "edit", ROLE)
+    if save_disabled:
+        st.info("Your role is read-only for edits.")
+
+    if st.button("✅ Save Update", type="primary", disabled=save_disabled):
+        upsert_lead_update(SECTION, pid, status, assigned, row.get("lead_source") or "Cold Call", notes, follow, outcome or None, username=USER)
+        audit(USER, "LEAD_UPDATE", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} status={status}")
+        st.success("Saved.")
+        st.rerun()
+    # --- Lead 360 (Interactions / Tasks / Status History) ---
+    if not pid:
+        st.info("Select a lead/property in **Leads Pipeline** to view Interactions, Tasks, and Status History.")
     else:
-        row = filtered_df.iloc[0].to_dict()
+        st.markdown("---")
 
-        st.markdown(f"**{pid_to_code.get(pid, pid[:6])} — {row.get('Property Name','')}**")
-        st.caption(row.get("Property Address", ""))
-
-        c1, c2 = st.columns(2)
-        with c1:
-            status = st.selectbox(
-                "Status",
-                LEAD_STATUS,
-                index=LEAD_STATUS.index(row.get("status", "New")) if row.get("status", "New") in LEAD_STATUS else 0,
-            )
-            assigned = st.text_input("Assigned to", value=row.get("assigned_to", ""))
-        with c2:
-            outcome = st.selectbox("Last call outcome (optional)", [""] + CALL_OUTCOMES, index=0)
-            follow = st.text_input("Follow-up (date/note)", value=row.get("follow_up", ""))
-
-        notes = st.text_area("Notes", value=row.get("notes", ""), height=120)
-
-        save_disabled = not can(SECTION, "edit", ROLE)
-        if save_disabled:
-            st.info("Your role is read-only for edits.")
-
-        if st.button("✅ Save Update", type="primary", disabled=save_disabled):
-            upsert_lead_update(SECTION, pid, status, assigned, row.get("lead_source") or "Cold Call", notes, follow, outcome or None, username=USER)
-            audit(USER, "LEAD_UPDATE", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} status={status}")
-            st.success("Saved.")
-            st.rerun()
-        # --- Lead 360 (Interactions / Tasks / Status History) ---
-        if not pid:
-            st.info("Select a lead/property in **Leads Pipeline** to view Interactions, Tasks, and Status History.")
+        # If tables are missing, show a friendly message (no crash)
+        if not (table_exists("interactions") or table_exists("tasks") or table_exists("lead_status_history")):
+            st.info("Lead 360 modules are not enabled yet. Run DB migration to create Interactions/Tasks/History tables.")
         else:
-            st.markdown("---")
+            t_int, t_tasks, t_hist = st.tabs(["📒 Interactions", "⏰ Tasks & Alerts", "🧾 Status History"])
 
-            # If tables are missing, show a friendly message (no crash)
-            if not (table_exists("interactions") or table_exists("tasks") or table_exists("lead_status_history")):
-                st.info("Lead 360 modules are not enabled yet. Run DB migration to create Interactions/Tasks/History tables.")
-            else:
-                t_int, t_tasks, t_hist = st.tabs(["📒 Interactions", "⏰ Tasks & Alerts", "🧾 Status History"])
+            with t_int:
+                if not table_exists("interactions"):
+                    st.info("Interactions table not found. Run the migration SQL to enable this module.")
+                else:
+                    ints = qdf(
+                        """SELECT interaction_date, mode, remarks, next_follow_up_date, created_by, attachment_url
+                           FROM interactions
+                          WHERE record_hash=:h AND section=:s
+                          ORDER BY interaction_date DESC
+                          LIMIT 300""",
+                        {"h": pid, "s": SECTION},
+                    )
+                    st.markdown(f"<span class='badge badge-strong'>Interactions: {len(ints):,}</span>", unsafe_allow_html=True)
+                    st.dataframe(ints, use_container_width=True, height=260)
 
-                with t_int:
-                    if not table_exists("interactions"):
-                        st.info("Interactions table not found. Run the migration SQL to enable this module.")
-                    else:
-                        ints = qdf(
-                            """SELECT interaction_date, mode, remarks, next_follow_up_date, created_by, attachment_url
-                               FROM interactions
-                              WHERE record_hash=:h AND section=:s
-                              ORDER BY interaction_date DESC
-                              LIMIT 300""",
-                            {"h": pid, "s": SECTION},
+                    can_add_int = can(SECTION, "edit", ROLE)
+                    with st.form("add_interaction"):
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            mode = st.selectbox("Mode", ["Call", "Email", "WhatsApp", "Visit"], index=0)
+                        with c2:
+                            next_fu = st.date_input("Next follow-up date (optional)", value=None)
+                        with c3:
+                            attach = st.text_input("Attachment URL (optional)")
+                        remarks = st.text_area("Remarks", height=90)
+                        ok = st.form_submit_button("➕ Add Interaction", type="primary", disabled=not can_add_int)
+
+                    if ok:
+                        exec_sql(
+                            """INSERT INTO interactions(id,record_hash,section,mode,remarks,next_follow_up_date,created_by,attachment_url)
+                                VALUES(:id,:h,:s,:m,:r,:n,:by,:a)""",
+                            {
+                                "id": str(uuid.uuid4()),
+                                "h": pid,
+                                "s": SECTION,
+                                "m": mode,
+                                "r": remarks,
+                                "n": (next_fu.isoformat() if next_fu else None),
+                                "by": USER,
+                                "a": attach,
+                            },
                         )
-                        st.markdown(f"<span class='badge badge-strong'>Interactions: {len(ints):,}</span>", unsafe_allow_html=True)
-                        st.dataframe(ints, use_container_width=True, height=260)
+                        audit(USER, "ADD_INTERACTION", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} mode={mode}")
+                        st.success("Interaction added.")
+                        st.rerun()
 
-                        can_add_int = can(SECTION, "edit", ROLE)
-                        with st.form("add_interaction"):
-                            c1, c2, c3 = st.columns(3)
-                            with c1:
-                                mode = st.selectbox("Mode", ["Call", "Email", "WhatsApp", "Visit"], index=0)
-                            with c2:
-                                next_fu = st.date_input("Next follow-up date (optional)", value=None)
-                            with c3:
-                                attach = st.text_input("Attachment URL (optional)")
-                            remarks = st.text_area("Remarks", height=90)
-                            ok = st.form_submit_button("➕ Add Interaction", type="primary", disabled=not can_add_int)
+            with t_tasks:
+                if not table_exists("tasks"):
+                    st.info("Tasks table not found. Run the migration SQL to enable this module.")
+                else:
+                    tasks = qdf(
+                        """SELECT title, task_type, priority, status, assigned_to, due_date, created_at, created_by, notes
+                           FROM tasks
+                          WHERE record_hash=:h AND (section=:s OR section IS NULL OR section='')
+                          ORDER BY CASE WHEN status='Done' THEN 1 ELSE 0 END,
+                                   due_date NULLS LAST, created_at DESC
+                          LIMIT 300""",
+                        {"h": pid, "s": SECTION},
+                    )
+                    st.markdown(f"<span class='badge badge-strong'>Tasks: {len(tasks):,}</span>", unsafe_allow_html=True)
+                    st.dataframe(tasks, use_container_width=True, height=260)
 
-                        if ok:
-                            exec_sql(
-                                """INSERT INTO interactions(id,record_hash,section,mode,remarks,next_follow_up_date,created_by,attachment_url)
-                                    VALUES(:id,:h,:s,:m,:r,:n,:by,:a)""",
-                                {
-                                    "id": str(uuid.uuid4()),
-                                    "h": pid,
-                                    "s": SECTION,
-                                    "m": mode,
-                                    "r": remarks,
-                                    "n": (next_fu.isoformat() if next_fu else None),
-                                    "by": USER,
-                                    "a": attach,
-                                },
-                            )
-                            audit(USER, "ADD_INTERACTION", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} mode={mode}")
-                            st.success("Interaction added.")
-                            st.rerun()
+                    can_add_task = can(SECTION, "edit", ROLE)
+                    with st.form("add_task"):
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            title = st.text_input("Task title", placeholder="e.g., Site survey / Follow-up call / Permission letter")
+                            task_type = st.selectbox("Task type", ["Follow-up", "Survey", "Permission", "Installation", "Payment", "AdCampaign", "Other"], index=0)
+                        with c2:
+                            priority = st.selectbox("Priority", ["Low", "Medium", "High"], index=1)
+                            due = st.date_input("Due date", value=date.today() + timedelta(days=2))
+                        with c3:
+                            assignee = st.text_input("Assigned to", value=(row.get("assigned_to","") or USER))
+                            status_t = st.selectbox("Status", ["Open", "In Progress", "Done", "Cancelled"], index=0)
+                        notes_t = st.text_area("Notes", height=80)
+                        ok2 = st.form_submit_button("➕ Create Task", type="primary", disabled=not can_add_task)
 
-                with t_tasks:
-                    if not table_exists("tasks"):
-                        st.info("Tasks table not found. Run the migration SQL to enable this module.")
-                    else:
-                        tasks = qdf(
-                            """SELECT title, task_type, priority, status, assigned_to, due_date, created_at, created_by, notes
-                               FROM tasks
-                              WHERE record_hash=:h AND (section=:s OR section IS NULL OR section='')
-                              ORDER BY CASE WHEN status='Done' THEN 1 ELSE 0 END,
-                                       due_date NULLS LAST, created_at DESC
-                              LIMIT 300""",
-                            {"h": pid, "s": SECTION},
+                    if ok2:
+                        exec_sql(
+                            """INSERT INTO tasks(id,record_hash,section,title,task_type,priority,status,assigned_to,due_date,created_by,notes)
+                                VALUES(:id,:h,:s,:t,:tt,:p,:st,:a,:d,:by,:n)""",
+                            {
+                                "id": str(uuid.uuid4()),
+                                "h": pid,
+                                "s": SECTION,
+                                "t": title or "Task",
+                                "tt": task_type,
+                                "p": priority,
+                                "st": status_t,
+                                "a": assignee,
+                                "d": due.isoformat() if due else None,
+                                "by": USER,
+                                "n": notes_t,
+                            },
                         )
-                        st.markdown(f"<span class='badge badge-strong'>Tasks: {len(tasks):,}</span>", unsafe_allow_html=True)
-                        st.dataframe(tasks, use_container_width=True, height=260)
+                        audit(USER, "ADD_TASK", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} title={title}")
+                        st.success("Task created.")
+                        st.rerun()
 
-                        can_add_task = can(SECTION, "edit", ROLE)
-                        with st.form("add_task"):
-                            c1, c2, c3 = st.columns(3)
-                            with c1:
-                                title = st.text_input("Task title", placeholder="e.g., Site survey / Follow-up call / Permission letter")
-                                task_type = st.selectbox("Task type", ["Follow-up", "Survey", "Permission", "Installation", "Payment", "AdCampaign", "Other"], index=0)
-                            with c2:
-                                priority = st.selectbox("Priority", ["Low", "Medium", "High"], index=1)
-                                due = st.date_input("Due date", value=date.today() + timedelta(days=2))
-                            with c3:
-                                assignee = st.text_input("Assigned to", value=(row.get("assigned_to","") or USER))
-                                status_t = st.selectbox("Status", ["Open", "In Progress", "Done", "Cancelled"], index=0)
-                            notes_t = st.text_area("Notes", height=80)
-                            ok2 = st.form_submit_button("➕ Create Task", type="primary", disabled=not can_add_task)
-
-                        if ok2:
-                            exec_sql(
-                                """INSERT INTO tasks(id,record_hash,section,title,task_type,priority,status,assigned_to,due_date,created_by,notes)
-                                    VALUES(:id,:h,:s,:t,:tt,:p,:st,:a,:d,:by,:n)""",
-                                {
-                                    "id": str(uuid.uuid4()),
-                                    "h": pid,
-                                    "s": SECTION,
-                                    "t": title or "Task",
-                                    "tt": task_type,
-                                    "p": priority,
-                                    "st": status_t,
-                                    "a": assignee,
-                                    "d": due.isoformat() if due else None,
-                                    "by": USER,
-                                    "n": notes_t,
-                                },
-                            )
-                            audit(USER, "ADD_TASK", f"section={SECTION} pid={pid_to_code.get(pid,pid[:6])} title={title}")
-                            st.success("Task created.")
-                            st.rerun()
-
-                with t_hist:
-                    if not table_exists("lead_status_history"):
-                        st.info("Status history table not found. Run the migration SQL to enable this module.")
-                    else:
-                        hist = qdf(
-                            """SELECT changed_at, status_from, status_to, changed_by, note
-                               FROM lead_status_history
-                              WHERE record_hash=:h AND section=:s
-                              ORDER BY changed_at DESC
-                              LIMIT 300""",
-                            {"h": pid, "s": SECTION},
-                        )
-                        st.markdown(f"<span class='badge badge-strong'>Status changes: {len(hist):,}</span>", unsafe_allow_html=True)
-                        st.dataframe(hist, use_container_width=True, height=260)
+            with t_hist:
+                if not table_exists("lead_status_history"):
+                    st.info("Status history table not found. Run the migration SQL to enable this module.")
+                else:
+                    hist = qdf(
+                        """SELECT changed_at, status_from, status_to, changed_by, note
+                           FROM lead_status_history
+                          WHERE record_hash=:h AND section=:s
+                          ORDER BY changed_at DESC
+                          LIMIT 300""",
+                        {"h": pid, "s": SECTION},
+                    )
+                    st.markdown(f"<span class='badge badge-strong'>Status changes: {len(hist):,}</span>", unsafe_allow_html=True)
+                    st.dataframe(hist, use_container_width=True, height=260)
 elif PAGE_KEY == "Inventory (Sites)":
     page_title("🗂 Inventory (Sites)", "Create / update installed sites. Fast search + CRUD.")
 
