@@ -2387,4 +2387,54 @@ elif PAGE_KEY == "Documents Vault":
             st.info("No upload permission.")
         else:
             inv = qdf("SELECT property_id, property_name FROM inventory_sites ORDER BY property_name LIMIT 5000")
-            pid_list = inv["property_id"].fillna("").
+            pid_list = inv["property_id"].fillna("").astype(str).tolist()
+            with st.form("doc_upload"):
+                property_id = st.selectbox("property_id", [""] + pid_list, index=0)
+                doc_type = st.text_input("doc_type", value="Agreement")
+                issue_date = st.text_input("issue_date (YYYY-MM-DD)", value="")
+                expiry_date = st.text_input("expiry_date (YYYY-MM-DD)", value="")
+                up = st.file_uploader("Choose file", type=None)
+                ok = st.form_submit_button("Upload", type="primary")
+            if ok:
+                if not up:
+                    st.error("Please choose a file.")
+                else:
+                    doc_id = str(uuid.uuid4())
+                    fname = re.sub(r"[^A-Za-z0-9._-]+", "_", up.name)
+                    storage_path = str(Path("uploads") / f"{doc_id}_{fname}")
+                    Path(storage_path).write_bytes(up.getbuffer())
+                    exec_sql(
+                        """INSERT INTO documents_vault(doc_id,section,property_id,doc_type,filename,storage_path,issue_date,expiry_date,uploaded_by)
+                           VALUES(:id,:sec,:pid,:dt,:fn,:sp,:is,:ex,:by)
+                        """,
+                        {
+                            "id": doc_id,
+                            "sec": SECTION,
+                            "pid": property_id or None,
+                            "dt": doc_type,
+                            "fn": fname,
+                            "sp": storage_path,
+                            "is": issue_date,
+                            "ex": expiry_date,
+                            "by": USER,
+                        },
+                    )
+                    audit(USER, "UPLOAD_DOC", f"{SECTION} {doc_id} {fname}")
+                    st.success("Uploaded.")
+                    st.rerun()
+
+elif PAGE_KEY == "Map View":
+    page_title("🗺 Map View", "View sites on map (requires latitude/longitude).")
+
+    if not can(SECTION, "view", ROLE):
+        st.error("You don't have permission to view this section.")
+        st.stop()
+
+    inv = qdf("SELECT property_name, city, district, latitude, longitude FROM inventory_sites WHERE latitude IS NOT NULL AND longitude IS NOT NULL LIMIT 5000")
+    if len(inv) == 0:
+        st.info("No sites with coordinates yet. Fill latitude/longitude in Inventory.")
+    else:
+        st.map(inv.rename(columns={"latitude":"lat","longitude":"lon"}), zoom=10)
+
+else:
+    st.info("This page is not implemented yet in this build.")
