@@ -287,7 +287,98 @@ def column_exists(table_name: str, column_name: str) -> bool:
         {"t": table_name, "c": column_name},
     )
     return bool(df.iloc[0]["ex"])
+# =========================================================
+# DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL
+# =========================================================
+import os
+import socket
+from urllib.parse import urlparse
 
+import pandas as pd
+import streamlit as st
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
+from sqlalchemy.exc import SQLAlchemyError
+
+
+def get_database_url() -> str:
+    # Priority: Streamlit Secrets -> Env var
+    try:
+        if "DATABASE_URL" in st.secrets:
+            return str(st.secrets["DATABASE_URL"]).strip()
+    except Exception:
+        pass
+    return os.environ.get("DATABASE_URL", "").strip()
+
+
+def _force_psycopg3(url: str) -> str:
+    u = (url or "").strip()
+    if u.startswith("postgres://"):
+        u = u.replace("postgres://", "postgresql://", 1)
+    if u.startswith("postgresql://") and "+psycopg" not in u:
+        u = u.replace("postgresql://", "postgresql+psycopg://", 1)
+    return u
+
+
+def _resolve_ipv4(host: str) -> str | None:
+    try:
+        infos = socket.getaddrinfo(host, None, family=socket.AF_INET, type=socket.SOCK_STREAM)
+        if infos:
+            return infos[0][4][0]
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_resource(show_spinner=False)
+def db_engine():
+    db_url = get_database_url()
+    if not db_url:
+        st.error("DATABASE_URL not found. Add it to Streamlit Secrets.")
+        st.stop()
+
+    url = _force_psycopg3(db_url)
+
+    # Resolve IPv4 (fixes common Streamlit Cloud IPv6 connect issue)
+    parsed = urlparse(url.replace("postgresql+psycopg://", "postgresql://", 1))
+    host = parsed.hostname or ""
+    connect_args = {}
+    ipv4 = _resolve_ipv4(host)
+    if ipv4:
+        connect_args["hostaddr"] = ipv4
+
+    eng = create_engine(
+        url,
+        pool_pre_ping=True,
+        poolclass=NullPool,   # safer with Supabase pooler/PgBouncer
+        connect_args=connect_args,
+    )
+
+    # Smoke test (fast fail)
+    with eng.connect() as conn:
+        conn.execute(text("SELECT 1"))
+
+    return eng
+
+
+def exec_sql(sql: str, params: dict | None = None) -> None:
+    try:
+        with db_engine().begin() as conn:
+            conn.execute(text(sql), params or {})
+    except SQLAlchemyError as e:
+        st.error("Database error while executing SQL.")
+        st.code(str(e))
+        st.stop()
+
+
+def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
+    try:
+        with db_engine().connect() as conn:
+            return pd.read_sql(text(sql), conn, params=params or {})
+    except SQLAlchemyError as e:
+        st.error("Database error while reading data.")
+        st.code(str(e))
+        st.stop()
 
 # =========================================================
 # DB MIGRATIONS + SEED (RUN ONCE PER SERVER)
