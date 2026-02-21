@@ -239,7 +239,7 @@ try:
         conn.execute(text("SELECT 1"))
         conn.commit()  # Optional but good practice
 
-    return eng
+return eng
 
 except Exception as e:
     st.error("Database connection failed.")
