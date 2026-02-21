@@ -162,87 +162,62 @@ st.markdown(
 # =========================================================
 # DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL + PERF
 # =========================================================
-import os, socket
-from urllib.parse import urlparse
-import streamlit as st
-import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
-from sqlalchemy.exc import SQLAlchemyError
-
-def get_database_url() -> str:
-    # Priority: Streamlit Secrets -> Env var
-    try:
-        if "DATABASE_URL" in st.secrets:
-            return str(st.secrets["DATABASE_URL"]).strip()
-    except Exception:
-        pass
-    return os.environ.get("DATABASE_URL", "").strip()
-
-def _force_psycopg3(url: str) -> str:
-    u = (url or "").strip()
-    if u.startswith("postgres://"):
-        u = u.replace("postgres://", "postgresql://", 1)
-    # If no explicit driver, force psycopg3
-    if u.startswith("postgresql://"):
-        u = u.replace("postgresql://", "postgresql+psycopg://", 1)
-    # If psycopg2 was specified, switch to psycopg3
-    if u.startswith("postgresql+psycopg2://"):
-        u = u.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
-    return u
-
-def _resolve_ipv4(host: str) -> str | None:
-    """Return an IPv4 for host if available (prevents IPv6 routing failures)."""
-    try:
-        infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
-        if infos:
-            return infos[0][4][0]
-    except Exception:
-        return None
-    return None
+import streamlit as st
+import os, socket
 
 @st.cache_resource(show_spinner=False)
-def db_engine():
-    db_url = get_database_url()
-    if not db_url:
-        st.error("DATABASE_URL not found. Add it to Streamlit Secrets (recommended) or env var.")
+def engine():
+    url = (os.environ.get("DATABASE_URL") or "").strip()
+    if not url:
+        st.error("DATABASE_URL not found in Streamlit Secrets.")
         st.stop()
 
-    url = _force_psycopg3(db_url)
-    parsed = urlparse(url)
-    host = parsed.hostname or ""
+    # Force psycopg v3 driver
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
 
-    # Force IPv4 (fixes IPv6 routing issues on some hosts)
-    ipv4 = _resolve_ipv4(host)
+    # Ensure SSL
+    if "sslmode=" not in url:
+        url += ("&" if "?" in url else "?") + "sslmode=require"
 
-    # ✅ PgBouncer/Supabase pooler stability: disable prepared statements
-connect_args = {
-    "connect_timeout": 10,
+    connect_args = {}
 
-    # ✅ Supabase Pooler / PgBouncer fix
-    "prepare_threshold": 0,
-    "prepared_statement_cache_size": 0,
-}
-if ipv4:
-    connect_args["hostaddr"] = ipv4
+    # Optional IPv4 forcing (helps when DNS returns IPv6 but runtime can't use it)
+    try:
+        host = url.split("@", 1)[1].split("/", 1)[0].split(":", 1)[0]
+        ipv4 = socket.gethostbyname(host)  # resolves to IPv4 if possible
+        if ipv4:
+            connect_args["hostaddr"] = ipv4
+    except Exception:
+        pass
 
-try:
-    eng = create_engine(
-        url,
-        pool_pre_ping=True,
-        poolclass=NullPool,   # safest with Supabase Pooler/PgBouncer
-        connect_args=connect_args,
-    )
+    try:
+        eng = create_engine(
+            url,
+            pool_pre_ping=True,
+            poolclass=NullPool,   # safest with Supabase Pooler/PgBouncer
+            connect_args=connect_args,
+        )
 
-    # smoke test
-    with eng.connect() as conn:
-        conn.execute(text("SELECT 1"))
-        conn.commit()  # Optional but good practice
+        # Smoke test
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
 
-return eng
+        return eng  # ✅ correct indentation (outside "with")
 
-except Exception as e:
-    st.error("Database connection failed.")
+    except Exception as e:
+        st.error("Database connection failed.")
+        st.caption(
+            "Checklist:\n"
+            "• Pooler URL: port 6543 and username like postgres.<project_ref>\n"
+            "• Direct DB URL: db.<project_ref>.supabase.co:5432 and username postgres\n"
+            "• requirements.txt must include: sqlalchemy and psycopg[binary]\n"
+            "• Some runtimes block outbound DB ports; then DB connect fails even with correct URL."
+        )
+        st.exception(e)
+        st.stop())
     st.caption(
         "Checklist:\n"
         "• Pooler URL must be port 6543 and username postgres.<project_ref>\n"
