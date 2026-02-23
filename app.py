@@ -1851,7 +1851,7 @@ def list_lead_updates(section: str) -> pd.DataFrame:
         
 # Lead updates (cached)
 upd = list_lead_updates(SECTION)
-leads_df = leads_df.merge(upd, left_on="__hash", right_on="record_hash", how="left")
+
 # ---------------------------------------------------------
 # SAFETY FIX: Make sure __hash exists before merge
 # ---------------------------------------------------------
@@ -1917,6 +1917,7 @@ if "record_hash" not in upd.columns:
 
     else:
         upd["record_hash"] = ""
+leads_df = leads_df.merge(upd, left_on="__hash", right_on="record_hash", how="left")
 for c, default in [("status", "New"), ("assigned_to", ""), ("lead_source", "Cold Call"), ("notes", ""), ("follow_up", "")]:
     leads_df[c] = leads_df[c].fillna(default)
 
