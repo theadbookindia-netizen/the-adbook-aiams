@@ -2125,18 +2125,175 @@ def page_documents_vault():
     st.dataframe(df, use_container_width=True)
 
 def page_map_view():
-    page_title("Map View", "Open property location in Google Maps")
-    st.info("This page opens Google Maps search links from your selected lead.")
-    if not pid:
-        st.warning("Select a lead first (save a lead update, or set active lead).")
+    page_title("Map View", "Map + filters + property popup (tooltip)")
+
+    # --- Safety: require view permission like other pages ---
+    if not can(SECTION, "view", ROLE):
+        st.error("You don't have permission to view this section.")
         return
-    sel = leads_df[leads_df["__hash"].astype("string") == str(pid)].head(1)
-    if len(sel) == 0:
-        st.warning("Active lead not found in current filtered dataset.")
+
+    # We will map from inventory_sites because that has latitude/longitude columns
+    # (your Inventory Add/Edit already shows latitude/longitude fields) :contentReference[oaicite:4]{index=4}
+    inv = qdf(
+        """SELECT
+             property_id, property_code, district, city, property_name, property_address,
+             latitude, longitude, contact_person, contact_details,
+             agreed_rent_pm, no_screens_installed, site_rating, notes, last_updated
+           FROM inventory_sites
+           ORDER BY last_updated DESC
+           LIMIT 5000"""
+    )
+
+    if inv is None or len(inv) == 0:
+        st.info("No inventory sites found yet. Add sites first in Inventory (Sites).")
         return
-    r = sel.iloc[0]
-    url = google_maps_url(str(r.get("Property Name","")), str(r.get("Property Address","")))
-    st.link_button("Open in Google Maps", url)
+
+    # Normalize coords safely
+    inv = inv.copy()
+    inv["latitude"] = pd.to_numeric(inv["latitude"], errors="coerce")
+    inv["longitude"] = pd.to_numeric(inv["longitude"], errors="coerce")
+    inv["has_coords"] = inv["latitude"].notna() & inv["longitude"].notna()
+
+    # Join lead_updates status/assigned_to (optional)
+    # list_lead_updates exists in your file :contentReference[oaicite:5]{index=5}
+    try:
+        upd = list_lead_updates(SECTION).copy()
+        upd["record_hash"] = upd["record_hash"].astype("string")
+        inv["property_id"] = inv["property_id"].astype("string")
+        inv = inv.merge(
+            upd[["record_hash", "status", "assigned_to", "lead_source"]],
+            left_on="property_id",
+            right_on="record_hash",
+            how="left",
+        )
+        inv.drop(columns=["record_hash"], inplace=True, errors="ignore")
+    except Exception:
+        inv["status"] = ""
+        inv["assigned_to"] = ""
+        inv["lead_source"] = ""
+
+    # ----------------------------
+    # Filters
+    # ----------------------------
+    c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1])
+
+    with c1:
+        only_coords = st.checkbox("Only with coordinates", value=True)
+    with c2:
+        districts = ["All"] + sorted([x for x in inv["district"].fillna("").astype(str).unique().tolist() if x.strip()])
+        f_district = st.selectbox("District", districts, index=0)
+    with c3:
+        # city depends on district selection for usability
+        tmp = inv
+        if f_district != "All":
+            tmp = tmp[tmp["district"].fillna("").astype(str) == f_district]
+        cities = ["All"] + sorted([x for x in tmp["city"].fillna("").astype(str).unique().tolist() if x.strip()])
+        f_city = st.selectbox("City", cities, index=0)
+    with c4:
+        statuses = ["All"] + sorted([x for x in inv["status"].fillna("").astype(str).unique().tolist() if x.strip()])
+        f_status = st.selectbox("Status", statuses, index=0)
+    with c5:
+        assignees = ["All"] + sorted([x for x in inv["assigned_to"].fillna("").astype(str).unique().tolist() if x.strip()])
+        f_assignee = st.selectbox("Assigned To", assignees, index=0)
+
+    df = inv.copy()
+    if only_coords:
+        df = df[df["has_coords"] == True]
+    if f_district != "All":
+        df = df[df["district"].fillna("").astype(str) == f_district]
+    if f_city != "All":
+        df = df[df["city"].fillna("").astype(str) == f_city]
+    if f_status != "All":
+        df = df[df["status"].fillna("").astype(str) == f_status]
+    if f_assignee != "All":
+        df = df[df["assigned_to"].fillna("").astype(str) == f_assignee]
+
+    st.markdown(f"<span class='badge badge-strong'>Map points: {len(df):,}</span>", unsafe_allow_html=True)
+
+    if len(df) == 0:
+        st.warning("No matching properties for current filters.")
+        return
+
+    # ----------------------------
+    # Map (pydeck) with tooltip popup
+    # ----------------------------
+    # Center map
+    center_lat = float(df["latitude"].dropna().iloc[0])
+    center_lon = float(df["longitude"].dropna().iloc[0])
+
+    tooltip = {
+        "html": """
+        <b>{property_code}</b><br/>
+        <b>{property_name}</b><br/>
+        {city}, {district}<br/>
+        Status: <b>{status}</b><br/>
+        Assigned: <b>{assigned_to}</b><br/>
+        Screens: <b>{no_screens_installed}</b><br/>
+        Rent/PM: <b>{agreed_rent_pm}</b><br/>
+        <hr style="margin:6px 0"/>
+        {property_address}
+        """,
+        "style": {"backgroundColor": "white", "color": "black"},
+    }
+
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=df,
+        get_position="[longitude, latitude]",
+        get_radius=120,
+        pickable=True,
+        auto_highlight=True,
+    )
+
+    view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=10)
+
+    st.pydeck_chart(
+        pdk.Deck(
+            layers=[layer],
+            initial_view_state=view_state,
+            tooltip=tooltip,
+        ),
+        use_container_width=True,
+    )
+
+    # ----------------------------
+    # Pick one property -> set active_pid + open Google Maps
+    # ----------------------------
+    # Build a nice label
+    df["_label"] = (
+        df["property_code"].fillna("").astype(str)
+        + " | "
+        + df["property_name"].fillna("").astype(str)
+        + " | "
+        + df["city"].fillna("").astype(str)
+    ).str.strip(" |")
+
+    pick = st.selectbox("Select property (sets Active Lead)", df["_label"].tolist(), index=0)
+    row = df[df["_label"] == pick].head(1).iloc[0].to_dict()
+
+    if st.button("Set as Active Lead"):
+        st.session_state["active_pid"] = str(row.get("property_id") or "")
+        st.success("Active Lead set.")
+        st.rerun()
+
+    # Google Maps link for this property
+    try:
+        url = google_maps_url(str(row.get("property_name", "")), str(row.get("property_address", "")))
+        st.link_button("Open selected property in Google Maps", url)
+    except Exception:
+        pass
+
+    # Show table for reference
+    show_cols = [
+        "property_id", "property_code", "district", "city",
+        "property_name", "status", "assigned_to",
+        "no_screens_installed", "agreed_rent_pm", "site_rating",
+        "latitude", "longitude", "last_updated"
+    ]
+    for c in show_cols:
+        if c not in df.columns:
+            df[c] = ""
+    st.dataframe(df[show_cols], use_container_width=True, height=320)
 
 def page_proposals():
     page_title("Proposals", "Generate and download system PDFs")
@@ -2424,9 +2581,7 @@ def render_page(page_key: str):
         return
     fn()
 
-# ---- Call the router ----
-render_page(PAGE_KEY)
-st.stop()
+
 # =========================================================
 # UTILS
 # =========================================================
@@ -4732,3 +4887,6 @@ elif PAGE_KEY == "Map View":
 
 else:
     st.info("This page is not implemented yet in this build.")
+# ---- Call the router ----
+render_page(PAGE_KEY)
+st.stop()
