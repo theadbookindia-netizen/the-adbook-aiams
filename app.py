@@ -2248,13 +2248,13 @@ def page_admin_panel():
             format_func=lambda x: ROLE_LABEL.get(x, x),
         )
 
-            new_scope = role_default_scope(new_role)
-            st.text_input("Module Scope (Auto)", value=new_scope, disabled=True)
+        new_scope = role_default_scope(new_role)
+        st.text_input("Module Scope (Auto)", value=new_scope, disabled=True)
 
-            new_active = st.checkbox(
-                "Active",
-                value=int(user_row["is_active"]) == 1,
-            )
+        new_active = st.checkbox(
+            "Active",
+             value=int(user_row["is_active"]) == 1,
+         )
 
             save = st.form_submit_button("Save Changes")
 
