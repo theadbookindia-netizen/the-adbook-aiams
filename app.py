@@ -728,6 +728,112 @@ def _str_contains(series: pd.Series, q: str) -> pd.Series:
     if not q:
         return pd.Series([True] * len(series), index=series.index)
     return series.fillna("").astype(str).str.lower().str.contains(q, na=False)
+
+
+# =========================================================
+# LEADS PIPELINE — UI HELPERS (ADD ONLY)
+# =========================================================
+
+def _init_leads_filters_state():
+    if "lp_filters" not in st.session_state:
+        st.session_state["lp_filters"] = {
+            "q": "",
+            "status": [],
+            "assignee": "",
+            "page": 1,
+            "page_size": 200,
+            "view_mode": "Table",  # Table | Cards
+            "compact": True,
+        }
+
+def _applied_filters_summary(f: dict) -> list[str]:
+    chips = []
+    if (f.get("q") or "").strip():
+        chips.append(f"Search: {f['q'].strip()}")
+    if f.get("status"):
+        chips.append("Status: " + ", ".join(map(str, f["status"])))
+    if (f.get("assignee") or "").strip():
+        chips.append(f"Assignee: {f['assignee'].strip()}")
+    return chips
+
+def _ensure_search_col(df: pd.DataFrame) -> pd.DataFrame:
+    if "__search" in df.columns:
+        return df
+    cols = [c for c in [
+        "Property Name", "Property Address", "City", "District",
+        "Promoter / Developer Name", "Promoter Mobile Number", "Promoter Email"
+    ] if c in df.columns]
+    if not cols:
+        df["__search"] = ""
+        return df
+    df["__search"] = (
+        df[cols].fillna("").astype("string").agg(" | ".join, axis=1).str.lower()
+    )
+    return df
+
+def _apply_leads_filters(df_in: pd.DataFrame, f: dict) -> pd.DataFrame:
+    df = df_in.copy()
+    df = _ensure_search_col(df)
+
+    q = (f.get("q") or "").strip().lower()
+    if q:
+        df = df[df["__search"].astype("string").str.contains(q, na=False)]
+
+    st_filter = f.get("status") or []
+    if st_filter and "status" in df.columns:
+        df = df[df["status"].isin(st_filter)]
+
+    assignee = (f.get("assignee") or "").strip()
+    if assignee and "assigned_to" in df.columns:
+        df = df[df["assigned_to"].astype("string").str.contains(assignee, case=False, na=False)]
+
+    return df
+
+def _paginate_df(df: pd.DataFrame, page: int, page_size: int) -> tuple[pd.DataFrame, int]:
+    page_size = max(25, int(page_size or 200))
+    total = int(len(df))
+    pages = max(1, int(np.ceil(total / page_size))) if total else 1
+    page = max(1, min(int(page or 1), pages))
+    start = (page - 1) * page_size
+    end = start + page_size
+    return df.iloc[start:end].copy(), pages
+
+def _lead_label(row: pd.Series) -> str:
+    name = str(row.get("Property Name", "") or "").strip()
+    city = str(row.get("City", "") or "").strip()
+    mob = str(row.get("Promoter Mobile Number", "") or "").strip()
+    bits = [b for b in [name, city, mob] if b]
+    return " | ".join(bits) if bits else str(row.get("__hash", "") or "")
+
+def _cards_view(df: pd.DataFrame, id_col="__hash"):
+    if df is None or len(df) == 0:
+        st.info("No results. Try clearing filters.")
+        return
+
+    df2 = df.head(100).copy()
+    for _, r in df2.iterrows():
+        rid = str(r.get(id_col, "") or "")
+        title = _lead_label(r)
+        with st.expander(title, expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**District:**", r.get("District", ""))
+                st.write("**City:**", r.get("City", ""))
+                st.write("**Status:**", r.get("status", ""))
+                st.write("**Assigned:**", r.get("assigned_to", ""))
+            with c2:
+                st.write("**Promoter:**", r.get("Promoter / Developer Name", ""))
+                st.write("**Mobile:**", r.get("Promoter Mobile Number", ""))
+                st.write("**Email:**", r.get("Promoter Email", ""))
+                st.write("**Follow-up:**", r.get("follow_up", ""))
+            addr = str(r.get("Property Address", "") or "")
+            if addr:
+                st.write("**Address:**", addr)
+            notes = str(r.get("notes", "") or "")
+            if notes:
+                st.write("**Notes:**", notes)
+            st.caption(f"Record: {rid}")
+
 # =========================================================
 # DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL
 # =========================================================
@@ -2432,70 +2538,213 @@ def page_management_dashboard():
 
 def page_leads_pipeline():
     page_title("Leads Pipeline", "Filter + update lead status (fast)")
-    # Basic filters (extend later)
-    f1, f2, f3 = st.columns(3)
-    with f1:
-        q = st.text_input("Search (name/address/city/mobile/email)", "")
-    with f2:
-        st_filter = st.multiselect("Status", LEAD_STATUS, default=[])
-    with f3:
-        assignee = st.text_input("Assigned to (username contains)", "")
+    _init_leads_filters_state()
+    f = st.session_state["lp_filters"]
 
-    df = leads_df.copy()
+    st.markdown('<div class="sticky-wrap">', unsafe_allow_html=True)
+    with st.form("leads_filters", clear_on_submit=False):
+        c1, c2, c3, c4, c5 = st.columns([2.2, 1.4, 1.4, 1.0, 1.0])
 
-    if q.strip():
-        qq = q.strip().lower()
-        df = df[df["__search"].astype("string").str.contains(qq, na=False)]
+        with c1:
+            q_in = st.text_input("Search", value=f.get("q", ""), placeholder="name / address / city / mobile / email")
+        with c2:
+            st_in = st.multiselect("Status", LEAD_STATUS, default=f.get("status", []))
+        with c3:
+            asg_in = st.text_input("Assigned to contains", value=f.get("assignee", ""), placeholder="username")
+        with c4:
+            page_size = st.selectbox(
+                "Rows/page",
+                [50, 100, 200, 500, 1000],
+                index=[50, 100, 200, 500, 1000].index(
+                    int(f.get("page_size", 200)) if int(f.get("page_size", 200)) in [50, 100, 200, 500, 1000] else 200
+                ),
+            )
+        with c5:
+            view_mode = st.selectbox("View", ["Table", "Cards"], index=0 if f.get("view_mode", "Table") == "Table" else 1)
 
-    if st_filter:
-        df = df[df["status"].isin(st_filter)]
+        cA, cB, cC = st.columns([1.2, 1.0, 1.2])
+        with cA:
+            apply_btn = st.form_submit_button("✅ Apply Filters", type="primary")
+        with cB:
+            clear_btn = st.form_submit_button("🧹 Clear")
+        with cC:
+            compact = st.toggle("Compact columns", value=bool(f.get("compact", True)))
 
-    if assignee.strip():
-        df = df[df["assigned_to"].astype("string").str.contains(assignee.strip(), case=False, na=False)]
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.caption(f"Showing {len(df):,} lead(s)")
+    if clear_btn:
+        st.session_state["lp_filters"] = {
+            "q": "",
+            "status": [],
+            "assignee": "",
+            "page": 1,
+            "page_size": 200,
+            "view_mode": "Table",
+            "compact": True,
+        }
+        st.rerun()
 
-    show_cols = [
-        "District","City","Property Name","Property Address",
-        "Promoter / Developer Name","Promoter Mobile Number","Promoter Email",
-        "status","assigned_to","lead_source","follow_up","notes"
+    if apply_btn:
+        f["q"] = q_in
+        f["status"] = st_in
+        f["assignee"] = asg_in
+        f["page_size"] = int(page_size)
+        f["view_mode"] = view_mode
+        f["compact"] = bool(compact)
+        f["page"] = 1
+        st.session_state["lp_filters"] = f
+
+    df_all = leads_df.copy()
+
+    show_cols_full = [
+        "District",
+        "City",
+        "Property Name",
+        "Property Address",
+        "Promoter / Developer Name",
+        "Promoter Mobile Number",
+        "Promoter Email",
+        "status",
+        "assigned_to",
+        "lead_source",
+        "follow_up",
+        "notes",
     ]
-    for c in show_cols:
-        if c not in df.columns:
-            df[c] = ""
+    for c in ["__hash", "status", "assigned_to", "lead_source", "follow_up", "notes"]:
+        if c not in df_all.columns:
+            df_all[c] = ""
 
-    st.dataframe(df[show_cols], use_container_width=True, height=520)
+    with st.spinner("Applying filters…"):
+        df_filtered = _apply_leads_filters(df_all, st.session_state["lp_filters"])
 
+    chips = _applied_filters_summary(st.session_state["lp_filters"])
+    left, right = st.columns([3, 2])
+    with left:
+        st.markdown(
+            f"<span class='badge badge-strong'>Showing {len(df_filtered):,}</span>"
+            f"<span class='badge'>Total {len(df_all):,}</span>",
+            unsafe_allow_html=True,
+        )
+        if chips:
+            for ch in chips:
+                st.markdown(f"<span class='badge'>{ch}</span>", unsafe_allow_html=True)
+        else:
+            st.caption("No filters applied.")
+    with right:
+        page = int(st.session_state["lp_filters"].get("page", 1) or 1)
+        page_size = int(st.session_state["lp_filters"].get("page_size", 200) or 200)
+        df_page, pages = _paginate_df(df_filtered, page=page, page_size=page_size)
+        p1, p2, p3 = st.columns([1, 1, 1])
+        with p1:
+            if st.button("⬅ Prev", disabled=(page <= 1)):
+                st.session_state["lp_filters"]["page"] = max(1, page - 1)
+                st.rerun()
+        with p2:
+            st.markdown(
+                f"<div class='small' style='text-align:center;padding-top:.5rem;'>Page <b>{page}</b> / {pages}</div>",
+                unsafe_allow_html=True,
+            )
+        with p3:
+            if st.button("Next ➡", disabled=(page >= pages)):
+                st.session_state["lp_filters"]["page"] = min(pages, page + 1)
+                st.rerun()
+
+    if st.session_state["lp_filters"].get("view_mode") == "Cards":
+        _cards_view(df_page)
+    else:
+        if bool(st.session_state["lp_filters"].get("compact", True)):
+            show_cols = ["District", "City", "Property Name", "Promoter Mobile Number", "status", "assigned_to", "follow_up"]
+        else:
+            show_cols = show_cols_full
+
+        for c in show_cols:
+            if c not in df_page.columns:
+                df_page[c] = ""
+
+        st.dataframe(df_page[show_cols], use_container_width=True, height=520)
+
+    st.divider()
     st.markdown("### Update a lead")
-    pid_list = df["__hash"].astype("string").dropna().unique().tolist()
-    if not pid_list:
+
+    if df_filtered is None or len(df_filtered) == 0:
+        st.info("No leads match your current filters. Click **Clear** to reset.")
+        return
+
+    tmp = df_filtered.copy()
+    tmp["__hash"] = tmp["__hash"].astype("string")
+    tmp = tmp[tmp["__hash"].fillna("").astype(str).str.len() > 0].copy()
+    if len(tmp) == 0:
         st.info("No leads available to update with the current filters.")
         return
 
-    pick = st.selectbox("Select lead (record hash)", pid_list)
-    row = df[df["__hash"].astype("string") == str(pick)].head(1)
-    if len(row):
-        st.write("**Selected:**", row.iloc[0].get("Property Name", ""), "|", row.iloc[0].get("City", ""))
+    labels = []
+    label_to_hash = {}
+    for _, r in tmp.iterrows():
+        h = str(r.get("__hash", "") or "")
+        lab = _lead_label(r)
+        if lab in label_to_hash:
+            lab = f"{lab}  •  {h[:8]}"
+        labels.append(lab)
+        label_to_hash[lab] = h
 
-    with st.form("lead_update_form"):
-        new_status = st.selectbox("Status", LEAD_STATUS, index=LEAD_STATUS.index("New") if "New" in LEAD_STATUS else 0)
-        assigned_to = st.text_input("Assign to (username)", value=str(row.iloc[0].get("assigned_to","") if len(row) else ""))
-        lead_source = st.text_input("Lead source", value=str(row.iloc[0].get("lead_source","Cold Call") if len(row) else "Cold Call"))
-        notes = st.text_area("Notes", value=str(row.iloc[0].get("notes","") if len(row) else ""))
-        follow_up = st.text_input("Follow-up (date/remark)", value=str(row.iloc[0].get("follow_up","") if len(row) else ""))
-        last_call_outcome = st.selectbox("Last call outcome (optional)", ["", *CALL_OUTCOMES], index=0)
-        ok = st.form_submit_button("Save update", type="primary")
+    pick_label = st.selectbox("Select lead", labels, index=0)
+    pick = label_to_hash.get(pick_label, labels[0])
 
-    if ok:
-        upsert_lead_update(
-            SECTION, str(pick), new_status, assigned_to.strip(), lead_source.strip(),
-            notes.strip(), follow_up.strip(),
-            last_call_outcome=(last_call_outcome or None),
-            username=USER
+    row_df = tmp[tmp["__hash"].astype("string") == str(pick)].head(1)
+    row = row_df.iloc[0] if len(row_df) else pd.Series(dtype="object")
+
+    st.caption(f"Selected: {row.get('Property Name','')} | {row.get('City','')} | {row.get('Promoter Mobile Number','')}")
+
+    can_edit = can(SECTION, "edit", ROLE)
+
+    with st.form("lead_update_form_v2", clear_on_submit=False):
+        c1, c2, c3 = st.columns([1.2, 1.2, 1.2])
+        with c1:
+            new_status = st.selectbox(
+                "Status",
+                LEAD_STATUS,
+                index=LEAD_STATUS.index(row.get("status")) if row.get("status") in LEAD_STATUS else 0,
+            )
+            last_call_outcome = st.selectbox("Last call outcome", ["", *CALL_OUTCOMES], index=0)
+        with c2:
+            assigned_to = st.text_input("Assigned to (username)", value=str(row.get("assigned_to", "") or ""))
+            lead_source = st.text_input("Lead source", value=str(row.get("lead_source", "") or "Cold Call"))
+        with c3:
+            follow_up = st.text_input(
+                "Follow-up",
+                value=str(row.get("follow_up", "") or ""),
+                placeholder="e.g. 2026-02-28 / Call after 3pm",
+            )
+
+        notes = st.text_area(
+            "Notes",
+            value=str(row.get("notes", "") or ""),
+            height=110,
+            placeholder="Add call notes, objections, next steps…",
         )
-        st.success("Saved.")
-        st.session_state["active_pid"] = str(pick)
-        st.rerun()
+
+        save = st.form_submit_button("💾 Save Lead Update", type="primary", disabled=not can_edit)
+
+    if save:
+        with st.spinner("Saving update…"):
+            try:
+                upsert_lead_update(
+                    section=SECTION,
+                    record_hash=str(pick),
+                    status=new_status,
+                    assigned_to=assigned_to,
+                    lead_source=lead_source,
+                    notes=notes,
+                    follow_up=follow_up,
+                    last_call_outcome=(last_call_outcome or None),
+                    username=USER,
+                )
+                st.success("Lead updated successfully.")
+                st.cache_data.clear()
+                st.rerun()
+            except Exception as e:
+                st.error("Update failed. No changes were saved.")
+                st.exception(e)
 
 def page_inventory_sites():
     page_title("Inventory (Sites)", "Master sites inventory")
