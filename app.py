@@ -4862,7 +4862,7 @@ elif PAGE_KEY == "Management Dashboard":
         hi = 0
         if column_exists("inventory_sites","high_value_flag"):
             try:
-                hi = int(qdf("SELECT COUNT(*) AS c FROM inventory_sites WHERE COALESCE(high_value_flag,0)=1").iloc[0]["c"] or 0)
+                hi = int(qdf("SELECT COUNT(*) AS c FROM inventory_sites WHERE COALESCE(high_value_flag, FALSE)").iloc[0]["c"] or 0)
             except Exception:
                 hi = 0
         kpi("High-Value (flagged)", f"{hi:,}")
