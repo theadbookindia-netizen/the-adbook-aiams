@@ -1791,7 +1791,64 @@ if "codes_df" not in st.session_state:
 codes_df = st.session_state["codes_df"]
 disp_map = st.session_state["disp_map"]
 pid_to_code = st.session_state["pid_to_code"]
+# =========================================================
+# LEAD UPDATES LOADER (required; must be defined before first use)
+# =========================================================
+@st.cache_data(show_spinner=False, ttl=60)
+def list_lead_updates(section: str) -> pd.DataFrame:
+    """
+    Returns lead_updates for a module section.
+    Backward compatible:
+      - If table doesn't exist -> empty DF with expected columns
+      - If some columns missing -> add defaults
+    """
+    # Safety: if your app has table_exists helper, use it
+    try:
+        if "table_exists" in globals() and callable(globals()["table_exists"]):
+            if not table_exists("lead_updates"):
+                return pd.DataFrame(columns=[
+                    "record_hash", "section", "status", "assigned_to", "lead_source", "notes", "follow_up"
+                ])
+    except Exception:
+        pass
 
+    try:
+        df = qdf(
+            """
+            SELECT
+              record_hash,
+              section,
+              COALESCE(status,'New') AS status,
+              COALESCE(assigned_to,'') AS assigned_to,
+              COALESCE(lead_source,'Cold Call') AS lead_source,
+              COALESCE(notes,'') AS notes,
+              COALESCE(follow_up,'') AS follow_up
+            FROM lead_updates
+            WHERE section = :s
+            """,
+            {"s": section},
+        )
+    except Exception:
+        # Table missing or query fails -> return safe empty df
+        df = pd.DataFrame(columns=[
+            "record_hash", "section", "status", "assigned_to", "lead_source", "notes", "follow_up"
+        ])
+
+    # Ensure required columns always exist
+    for c, default in [
+        ("record_hash", ""),
+        ("section", section),
+        ("status", "New"),
+        ("assigned_to", ""),
+        ("lead_source", "Cold Call"),
+        ("notes", ""),
+        ("follow_up", ""),
+    ]:
+        if c not in df.columns:
+            df[c] = default
+
+    return df
+        
 # Lead updates (cached)
 upd = list_lead_updates(SECTION)
 leads_df = leads_df.merge(upd, left_on="__hash", right_on="record_hash", how="left")
