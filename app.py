@@ -2094,10 +2094,260 @@ def page_reports():
 
 def page_admin_panel():
     page_title("Admin Panel", "Users + permissions + system settings")
+
+    # Only Super Admin allowed
     if ROLE != ROLE_SUPER_ADMIN:
         st.error("Access denied.")
         return
-    st.info("Add user creation, role assignment, permission controls, etc.")
+
+    tab1, tab2, tab3 = st.tabs([
+        "➕ Create User",
+        "✏️ Edit User",
+        "🔑 Reset Password"
+    ])
+
+    # =====================================================
+    # TAB 1: CREATE USER
+    # =====================================================
+    with tab1:
+        with st.form("create_user_form"):
+
+            username = st.text_input("Username").strip()
+
+            role = st.selectbox(
+                "Role",
+                list(ROLE_LABEL.keys()),
+                format_func=lambda x: ROLE_LABEL.get(x, x)
+            )
+
+            scope = role_default_scope(role)
+            st.text_input("Module Scope (Auto)", value=scope, disabled=True)
+
+            is_active = st.checkbox("Active", value=True)
+
+            password_mode = st.selectbox(
+                "Password Mode",
+                ["Auto Generate", "Set Manually"]
+            )
+
+            temp_password = ""
+            if password_mode == "Set Manually":
+                temp_password = st.text_input(
+                    "Temporary Password",
+                    type="password"
+                )
+
+            submit = st.form_submit_button("Create User")
+
+        if submit:
+
+            if not username:
+                st.error("Username is required.")
+                return
+
+            # Check if user exists
+            exists = qdf(
+                "SELECT 1 FROM users WHERE username=:u",
+                {"u": username}
+            )
+
+            if len(exists):
+                st.error("User already exists.")
+                return
+
+            # Generate password if needed
+            if password_mode == "Auto Generate":
+                temp_password = uuid.uuid4().hex[:10]
+
+            if not temp_password:
+                st.error("Password required.")
+                return
+
+            password_hash = pbkdf2_hash(temp_password)
+
+            # Insert user
+            exec_sql(
+                """
+                INSERT INTO users
+                (username,password_hash,role,section_scope,is_active,created_at,updated_at)
+                VALUES
+                (:u,:p,:r,:s,:a,NOW(),NOW())
+                """,
+                {
+                    "u": username,
+                    "p": password_hash,
+                    "r": role,
+                    "s": scope,
+                    "a": 1 if is_active else 0,
+                },
+            )
+
+            # Audit
+            audit(
+                USER,
+                "USER_CREATE",
+                f"Created user {username}",
+                entity_table="users",
+                entity_id=username,
+                operation="INSERT",
+                new_data={
+                    "username": username,
+                    "role": role,
+                    "scope": scope,
+                    "active": is_active,
+                },
+                changed_fields=[
+                    "username",
+                    "password_hash",
+                    "role",
+                    "section_scope",
+                    "is_active",
+                ],
+            )
+
+            st.success("User created successfully.")
+            st.info(f"Temporary Password: **{temp_password}** (Save it now)")
+
+    # =====================================================
+    # TAB 2: EDIT USER
+    # =====================================================
+    with tab2:
+
+        users_df = qdf(
+            "SELECT username, role, section_scope, is_active FROM users ORDER BY username"
+        )
+
+        if len(users_df) == 0:
+            st.warning("No users found.")
+            return
+
+        selected = st.selectbox(
+            "Select User",
+            users_df["username"].tolist()
+        )
+
+        user_row = get_user(selected)
+
+        with st.form("edit_user_form"):
+
+            new_role = st.selectbox(
+                "Role",
+                list(ROLE_LABEL.keys()),
+                index=list(ROLE_LABEL.keys()).index(user_row["role"]),
+                format_func=lambda x: ROLE_LABEL.get(x, x),
+            )
+
+            new_scope = role_default_scope(new_role)
+            st.text_input("Module Scope (Auto)", value=new_scope, disabled=True)
+
+            new_active = st.checkbox(
+                "Active",
+                value=int(user_row["is_active"]) == 1,
+            )
+
+            save = st.form_submit_button("Save Changes")
+
+        if save:
+
+            old = get_user(selected)
+
+            exec_sql(
+                """
+                UPDATE users
+                SET role=:r,
+                    section_scope=:s,
+                    is_active=:a,
+                    updated_at=NOW()
+                WHERE username=:u
+                """,
+                {
+                    "u": selected,
+                    "r": new_role,
+                    "s": new_scope,
+                    "a": 1 if new_active else 0,
+                },
+            )
+
+            new = get_user(selected)
+
+            audit(
+                USER,
+                "USER_UPDATE",
+                f"Updated user {selected}",
+                entity_table="users",
+                entity_id=selected,
+                operation="UPDATE",
+                old_data=old,
+                new_data=new,
+                changed_fields=[
+                    "role",
+                    "section_scope",
+                    "is_active",
+                ],
+            )
+
+            st.success("User updated.")
+
+    # =====================================================
+    # TAB 3: RESET PASSWORD
+    # =====================================================
+    with tab3:
+
+        users_df = qdf(
+            "SELECT username FROM users ORDER BY username"
+        )
+
+        selected = st.selectbox(
+            "Select User",
+            users_df["username"].tolist(),
+            key="reset_user",
+        )
+
+        with st.form("reset_pw_form"):
+
+            new_pw = st.text_input(
+                "New Password",
+                type="password"
+            )
+
+            reset = st.form_submit_button("Reset Password")
+
+        if reset:
+
+            if not new_pw:
+                st.error("Password required.")
+                return
+
+            old = get_user(selected)
+
+            exec_sql(
+                """
+                UPDATE users
+                SET password_hash=:p,
+                    updated_at=NOW()
+                WHERE username=:u
+                """,
+                {
+                    "u": selected,
+                    "p": pbkdf2_hash(new_pw),
+                },
+            )
+
+            new = get_user(selected)
+
+            audit(
+                USER,
+                "USER_RESET_PASSWORD",
+                f"Reset password for {selected}",
+                entity_table="users",
+                entity_id=selected,
+                operation="UPDATE",
+                old_data=old,
+                new_data=new,
+                changed_fields=["password_hash"],
+            )
+
+            st.success("Password reset successfully.")
 
 def render_page(page_key: str):
     # Normalize the same way your code does (PAGE_KEY already normalized)
