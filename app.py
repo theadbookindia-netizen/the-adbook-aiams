@@ -1991,11 +1991,2248 @@ def can(section: str, action: str, role: str) -> bool:
     return bool(_perm_val(row, action))
 
 
-def page_title(title: str, subtitle: str):
+
+# =========================================================
+# UI THEME (Upgraded) — modern dashboard feel (safe UI-only)
+# =========================================================
+def inject_brand_css():
     st.markdown(
-        f"<div class='card'><div class='section'>{title}</div><div class='small'>{subtitle}</div></div>",
+        """
+<style>
+/* --------- Brand tokens ---------- */
+:root{
+  --bg:#ffffff;
+  --surface:#ffffff;
+  --surface2:#f6f8fb;
+  --border:#e6e8ef;
+
+  --text:#0f172a;
+  --muted:#475569;
+
+  /* Brand palette (matches existing accent teal; add warm CTA accent) */
+  --primary:#0f5b66;
+  --primary2:#0b3f47;
+  --accent:#f59e0b;
+  --accent2:#b45309;
+
+  --ok:#15803d;
+  --warn:#b45309;
+  --danger:#b91c1c;
+
+  --shadow: 0 10px 30px rgba(15,23,42,.08);
+  --shadow2: 0 14px 40px rgba(15,23,42,.12);
+
+  --r-xl: 22px;
+  --r-lg: 18px;
+  --r-md: 14px;
+
+  --pad: 14px;
+}
+
+/* --------- App canvas ---------- */
+.block-container{
+  max-width: 1560px;
+  padding-top: .65rem;
+  padding-bottom: 2rem;
+}
+[data-testid="stAppViewContainer"]{
+  background: radial-gradient(1200px 600px at 20% -10%, rgba(15,91,102,.09), transparent 60%),
+              radial-gradient(900px 500px at 95% 0%, rgba(245,158,11,.12), transparent 55%),
+              var(--bg);
+}
+[data-testid="stHeader"]{
+  background: rgba(255,255,255,.92);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+}
+[data-testid="stSidebar"]{
+  background: linear-gradient(180deg, #f8fafc, #f4f7fb);
+  border-right: 1px solid var(--border);
+}
+
+/* --------- Typography ---------- */
+html, body, [class*="css"]  {
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Helvetica Neue", sans-serif;
+}
+h1,h2,h3{ letter-spacing: -0.02em; }
+
+/* --------- Cards / sections ---------- */
+.card{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: var(--pad);
+  box-shadow: var(--shadow);
+}
+.card-tight{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 12px;
+}
+.section{
+  font-weight: 800;
+  font-size: 1.15rem;
+  color: var(--text);
+}
+.small{
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+/* --------- Top header bar ---------- */
+.topbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: rgba(255,255,255,.85);
+  box-shadow: var(--shadow);
+}
+.topbar .left{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  min-width: 260px;
+}
+.brand-dot{
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 4px rgba(15,91,102,.12);
+}
+.pill{
+  display:inline-flex;
+  align-items:center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  font-size: .85rem;
+  white-space: nowrap;
+}
+.pill.primary{
+  border-color: rgba(15,91,102,.25);
+  background: rgba(15,91,102,.08);
+}
+.pill.accent{
+  border-color: rgba(245,158,11,.25);
+  background: rgba(245,158,11,.12);
+}
+
+/* --------- Buttons (global) ---------- */
+div.stButton > button,
+div.stDownloadButton > button,
+div.stLinkButton > a{
+  border-radius: 14px !important;
+  border: 1px solid rgba(15,23,42,.08) !important;
+  padding: 0.6rem 0.9rem !important;
+  box-shadow: 0 8px 22px rgba(15,23,42,.08) !important;
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease !important;
+}
+div.stButton > button:hover,
+div.stDownloadButton > button:hover,
+div.stLinkButton > a:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(15,23,42,.12) !important;
+  filter: saturate(1.05);
+}
+button[kind="primary"]{
+  background: linear-gradient(135deg, var(--primary), var(--primary2)) !important;
+  border: 1px solid rgba(15,91,102,.25) !important;
+}
+
+/* --------- Badges ---------- */
+.badge{
+  display:inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: .78rem;
+  color: var(--muted);
+}
+.badge-strong{
+  border-color: rgba(15,91,102,.28);
+  background: rgba(15,91,102,.08);
+  color: var(--primary2);
+  font-weight: 700;
+}
+.badge-ok{ background: rgba(21,128,61,.10); border-color: rgba(21,128,61,.25); color: var(--ok); font-weight:700; }
+.badge-warn{ background: rgba(180,83,9,.10); border-color: rgba(180,83,9,.25); color: var(--warn); font-weight:700; }
+.badge-danger{ background: rgba(185,28,28,.10); border-color: rgba(185,28,28,.25); color: var(--danger); font-weight:700; }
+
+/* --------- Table polish ---------- */
+[data-testid="stDataFrame"]{
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+[data-testid="stDataFrame"] *{ font-size: .92rem; }
+
+/* --------- Sidebar nav polish ---------- */
+.nav-group{
+  margin-top: 6px;
+  margin-bottom: 6px;
+  font-weight: 800;
+  color: var(--text);
+  font-size: .85rem;
+  opacity: .75;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.nav-item{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  color: var(--text);
+  text-decoration:none !important;
+  transition: background .12s ease, border-color .12s ease, transform .12s ease;
+}
+.nav-item:hover{
+  background: rgba(15,91,102,.07);
+  border-color: rgba(15,91,102,.16);
+  transform: translateY(-1px);
+}
+.nav-item.active{
+  background: rgba(15,91,102,.12);
+  border-color: rgba(15,91,102,.25);
+}
+
+/* --------- Responsive ---------- */
+@media (max-width: 900px){
+  .block-container{ padding-left: .8rem; padding-right: .8rem; }
+  .topbar{ flex-direction: column; align-items: flex-start; }
+  div.stButton > button{ width: 100%; }
+}
+</style>
+        """,
         unsafe_allow_html=True,
     )
+
+inject_brand_css()
+
+
+def _img_to_base64(path: str) -> str:
+    p = Path(path)
+    if not p.exists():
+        return ""
+    import base64
+    return base64.b64encode(p.read_bytes()).decode("utf-8")
+
+
+logo_b64 = _img_to_base64(LOGO_PATH)
+if logo_b64:
+    logo_html = f"<img src='data:image/png;base64,{logo_b64}'/>"
+else:
+    logo_html = "<div style='width:44px;height:44px;border-radius:10px;background:rgba(15,91,102,.08);border:1px solid #e6e8ef;'></div>"
+
+st.markdown(
+    f"""
+<div class="brandbar">
+  {logo_html}
+  <div>
+    <div class="title">The Adbook AIAMS</div>
+    <div class="sub">Inventory • Agreements • WhatsApp • Proposals • Reports</div>
+  </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# =========================================================
+# DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL + PERF
+# =========================================================
+import os
+import socket
+from urllib.parse import urlparse
+
+import pandas as pd
+import streamlit as st
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
+from sqlalchemy.exc import SQLAlchemyError
+
+
+def get_database_url() -> str:
+    """Read DATABASE_URL from Streamlit secrets first, then environment."""
+    try:
+        if "DATABASE_URL" in st.secrets:
+            return str(st.secrets["DATABASE_URL"]).strip()
+    except Exception:
+        pass
+    return os.environ.get("DATABASE_URL", "").strip()
+
+
+def _resolve_ipv4(host: str) -> str | None:
+    """Return an IPv4 address for host if available (avoids IPv6 issues)."""
+    try:
+        infos = socket.getaddrinfo(
+            host, None, family=socket.AF_INET, type=socket.SOCK_STREAM
+        )
+        if infos:
+            return infos[0][4][0]
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_resource(show_spinner=False)
+def db_engine():
+    try:
+        db_url = get_database_url()
+        if not db_url:
+            st.error("DATABASE_URL not found in Streamlit secrets.")
+            st.stop()
+
+        # normalize scheme + force psycopg3
+        url = db_url.strip()
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+        if url.startswith("postgresql://") and "+psycopg" not in url:
+            url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+        # Force IPv4 (Streamlit Cloud sometimes fails on IPv6)
+        parsed = urlparse(url.replace("postgresql+psycopg://", "postgresql://", 1))
+        host = parsed.hostname or ""
+        connect_args = {}
+        ipv4 = _resolve_ipv4(host)
+        if ipv4:
+            connect_args["hostaddr"] = ipv4
+
+        eng = create_engine(
+            url,
+            pool_pre_ping=True,
+            poolclass=NullPool,  # safest with Supabase Pooler/PgBouncer
+            connect_args=connect_args,
+        )
+
+        # smoke test
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
+
+        return eng
+
+    except Exception as e:
+        st.error("Database connection failed.")
+        st.caption(
+            "Checklist:\n"
+            "• Pooler URL: port 6543 and username postgres.<project_ref>\n"
+            "• Direct DB URL: db.<project_ref>.supabase.co:5432 and username postgres\n"
+            "• requirements.txt must include sqlalchemy + psycopg[binary]\n"
+            "• Some runtimes block outbound DB ports\n"
+        )
+        st.exception(e)
+        st.stop()
+
+
+def exec_sql(sql: str, params: dict | None = None) -> None:
+    try:
+        with db_engine().begin() as conn:
+            conn.execute(text(sql), params or {})
+    except SQLAlchemyError as e:
+        st.error("Database error while executing SQL.")
+        st.code(str(e))
+        st.stop()
+
+
+def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
+    try:
+        with db_engine().connect() as conn:
+            return pd.read_sql(text(sql), conn, params=params or {})
+    except SQLAlchemyError as e:
+        st.error("Database error while reading data.")
+        st.code(str(e))
+        st.stop()
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def table_exists(table_name: str) -> bool:
+    df = qdf(
+        """SELECT EXISTS(
+               SELECT 1 FROM information_schema.tables
+               WHERE table_schema='public' AND table_name=:t
+        ) AS ex""",
+        {"t": table_name},
+    )
+    return bool(df.iloc[0]["ex"])
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def column_exists(table_name: str, column_name: str) -> bool:
+    df = qdf(
+        """SELECT EXISTS(
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema='public' AND table_name=:t AND column_name=:c
+        ) AS ex""",
+        {"t": table_name, "c": column_name},
+    )
+    return bool(df.iloc[0]["ex"])
+
+# =========================================================
+# STEP-2 HELPERS: Surveys / Workorders / Milestones
+# =========================================================
+
+DEFAULT_MILESTONES = [
+    "Lead Qualified",
+    "Survey Scheduled",
+    "Survey Completed",
+    "Workorder Issued",
+    "Installation In Progress",
+    "Installed",
+    "Activated",
+]
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
+
+def _now_iso() -> str:
+    return pd.Timestamp.utcnow().isoformat()
+
+def _ensure_step2_tables_exist():
+    # Soft check: don't crash if user hasn't run SQL migrations yet
+    if "table_exists" in globals() and callable(globals()["table_exists"]):
+        for t in ["surveys", "workorders", "milestones"]:
+            if not table_exists(t):
+                st.info(f"Table '{t}' not found. Run Step-2 SQL migration in Supabase SQL Editor.")
+                return False
+    return True
+
+def get_inventory_site(property_id: str) -> dict | None:
+    if not property_id:
+        return None
+    df = qdf(
+        """SELECT * FROM inventory_sites WHERE property_id=:pid LIMIT 1""",
+        {"pid": str(property_id)},
+    )
+    return df.iloc[0].to_dict() if len(df) else None
+
+def list_surveys(section: str, property_id: str) -> pd.DataFrame:
+    if not _ensure_step2_tables_exist():
+        return pd.DataFrame()
+    return qdf(
+        """SELECT * FROM surveys
+           WHERE section=:s AND property_id=:pid
+           ORDER BY created_at DESC
+           LIMIT 50""",
+        {"s": section, "pid": str(property_id)},
+    )
+
+def list_workorders(section: str, property_id: str) -> pd.DataFrame:
+    if not _ensure_step2_tables_exist():
+        return pd.DataFrame()
+    return qdf(
+        """SELECT * FROM workorders
+           WHERE section=:s AND property_id=:pid
+           ORDER BY created_at DESC
+           LIMIT 200""",
+        {"s": section, "pid": str(property_id)},
+    )
+
+def list_milestones(section: str, property_id: str) -> pd.DataFrame:
+    if not _ensure_step2_tables_exist():
+        return pd.DataFrame()
+    return qdf(
+        """SELECT * FROM milestones
+           WHERE section=:s AND property_id=:pid
+           ORDER BY
+             CASE status WHEN 'Done' THEN 2 WHEN 'Blocked' THEN 1 ELSE 0 END,
+             due_date NULLS LAST,
+             created_at ASC
+        """,
+        {"s": section, "pid": str(property_id)},
+    )
+
+def ensure_default_milestones(section: str, property_id: str, username: str):
+    """
+    Creates default milestones once (unique index prevents duplicates).
+    """
+    if not _ensure_step2_tables_exist():
+        return
+    for name in DEFAULT_MILESTONES:
+        try:
+            exec_sql(
+                """
+                INSERT INTO milestones(milestone_id, section, property_id, name, status, created_by, created_at, updated_at)
+                VALUES(:id, :s, :pid, :name, 'Pending', :u, NOW(), NOW())
+                ON CONFLICT DO NOTHING
+                """,
+                {"id": _uuid(), "s": section, "pid": str(property_id), "name": name, "u": username},
+            )
+        except Exception:
+            # Don't break app if one insert fails
+            continue
+
+def upsert_survey(payload: dict, username: str, role: str):
+    # RBAC: treat as "edit" if survey_id exists else "add"
+    action = "edit" if payload.get("survey_id") else "add"
+    if not can_action(SECTION, action, role, username, entity_assigned_to=username, allow_assign=True) and not can(SECTION, action, role):
+        st.error("No permission for survey write.")
+        st.stop()
+
+    survey_id = str(payload.get("survey_id") or _uuid())
+    payload = payload.copy()
+    payload["survey_id"] = survey_id
+    payload.setdefault("created_by", username)
+
+    old = _fetch_one("SELECT * FROM surveys WHERE survey_id=:id", {"id": survey_id}) if _ensure_step2_tables_exist() else None
+
+    exec_sql(
+        """
+        INSERT INTO surveys(
+          survey_id, section, property_id, status, scheduled_on, completed_on,
+          surveyor, contact_person, contact_details,
+          site_feasible, power_available, internet_available,
+          mounting_type, screen_size, visibility_score, footfall_estimate,
+          notes, created_by, created_at, updated_at
+        )
+        VALUES(
+          :survey_id, :section, :property_id, :status, :scheduled_on, :completed_on,
+          :surveyor, :contact_person, :contact_details,
+          :site_feasible, :power_available, :internet_available,
+          :mounting_type, :screen_size, :visibility_score, :footfall_estimate,
+          :notes, :created_by, COALESCE(:created_at, NOW()), NOW()
+        )
+        ON CONFLICT(survey_id) DO UPDATE SET
+          status=EXCLUDED.status,
+          scheduled_on=EXCLUDED.scheduled_on,
+          completed_on=EXCLUDED.completed_on,
+          surveyor=EXCLUDED.surveyor,
+          contact_person=EXCLUDED.contact_person,
+          contact_details=EXCLUDED.contact_details,
+          site_feasible=EXCLUDED.site_feasible,
+          power_available=EXCLUDED.power_available,
+          internet_available=EXCLUDED.internet_available,
+          mounting_type=EXCLUDED.mounting_type,
+          screen_size=EXCLUDED.screen_size,
+          visibility_score=EXCLUDED.visibility_score,
+          footfall_estimate=EXCLUDED.footfall_estimate,
+          notes=EXCLUDED.notes,
+          updated_at=NOW()
+        """,
+        {
+            "survey_id": survey_id,
+            "section": payload.get("section"),
+            "property_id": payload.get("property_id"),
+            "status": payload.get("status", "Draft"),
+            "scheduled_on": payload.get("scheduled_on"),
+            "completed_on": payload.get("completed_on"),
+            "surveyor": payload.get("surveyor"),
+            "contact_person": payload.get("contact_person"),
+            "contact_details": payload.get("contact_details"),
+            "site_feasible": int(payload.get("site_feasible", 1)),
+            "power_available": int(payload.get("power_available", 1)),
+            "internet_available": int(payload.get("internet_available", 1)),
+            "mounting_type": payload.get("mounting_type"),
+            "screen_size": payload.get("screen_size"),
+            "visibility_score": payload.get("visibility_score"),
+            "footfall_estimate": payload.get("footfall_estimate"),
+            "notes": payload.get("notes"),
+            "created_by": payload.get("created_by", username),
+            "created_at": payload.get("created_at"),
+        },
+    )
+
+    new = _fetch_one("SELECT * FROM surveys WHERE survey_id=:id", {"id": survey_id})
+    audit(
+        username,
+        "UPSERT_SURVEY",
+        f"survey_id={survey_id} property_id={payload.get('property_id')}",
+        entity_table="surveys",
+        entity_id=survey_id,
+        operation="UPSERT",
+        old_data=old,
+        new_data=new,
+        changed_fields=_diff_fields(old, new),
+    )
+
+    # Auto milestone seeds
+    ensure_default_milestones(payload.get("section"), payload.get("property_id"), username)
+    # Auto advance a milestone
+    if str(payload.get("status", "")).lower() == "scheduled":
+        exec_sql("""UPDATE milestones SET status='Done', updated_at=NOW()
+                    WHERE section=:s AND property_id=:pid AND name='Survey Scheduled'""",
+                 {"s": payload.get("section"), "pid": str(payload.get("property_id"))})
+    if str(payload.get("status", "")).lower() == "completed":
+        exec_sql("""UPDATE milestones SET status='Done', completed_on=NOW()::text, updated_at=NOW()
+                    WHERE section=:s AND property_id=:pid AND name='Survey Completed'""",
+                 {"s": payload.get("section"), "pid": str(payload.get("property_id"))})
+
+def upsert_workorder(payload: dict, username: str, role: str):
+    action = "edit" if payload.get("workorder_id") else "add"
+    if not can_action(SECTION, action, role, username, entity_assigned_to=(payload.get("assigned_to") or username), allow_assign=True) and not can(SECTION, action, role):
+        st.error("No permission for workorder write.")
+        st.stop()
+
+    workorder_id = str(payload.get("workorder_id") or _uuid())
+    payload = payload.copy()
+    payload["workorder_id"] = workorder_id
+    payload.setdefault("created_by", username)
+
+    old = _fetch_one("SELECT * FROM workorders WHERE workorder_id=:id", {"id": workorder_id}) if _ensure_step2_tables_exist() else None
+
+    exec_sql(
+        """
+        INSERT INTO workorders(
+          workorder_id, section, property_id,
+          status, priority, assigned_to,
+          planned_install_date, installed_on,
+          installer_name, installer_contact,
+          material_required, estimated_cost, approved_budget,
+          notes, created_by, created_at, updated_at
+        )
+        VALUES(
+          :workorder_id, :section, :property_id,
+          :status, :priority, :assigned_to,
+          :planned_install_date, :installed_on,
+          :installer_name, :installer_contact,
+          :material_required, :estimated_cost, :approved_budget,
+          :notes, :created_by, COALESCE(:created_at, NOW()), NOW()
+        )
+        ON CONFLICT(workorder_id) DO UPDATE SET
+          status=EXCLUDED.status,
+          priority=EXCLUDED.priority,
+          assigned_to=EXCLUDED.assigned_to,
+          planned_install_date=EXCLUDED.planned_install_date,
+          installed_on=EXCLUDED.installed_on,
+          installer_name=EXCLUDED.installer_name,
+          installer_contact=EXCLUDED.installer_contact,
+          material_required=EXCLUDED.material_required,
+          estimated_cost=EXCLUDED.estimated_cost,
+          approved_budget=EXCLUDED.approved_budget,
+          notes=EXCLUDED.notes,
+          updated_at=NOW()
+        """,
+        {
+            "workorder_id": workorder_id,
+            "section": payload.get("section"),
+            "property_id": payload.get("property_id"),
+            "status": payload.get("status", "Open"),
+            "priority": payload.get("priority", "Medium"),
+            "assigned_to": payload.get("assigned_to"),
+            "planned_install_date": payload.get("planned_install_date"),
+            "installed_on": payload.get("installed_on"),
+            "installer_name": payload.get("installer_name"),
+            "installer_contact": payload.get("installer_contact"),
+            "material_required": payload.get("material_required"),
+            "estimated_cost": payload.get("estimated_cost"),
+            "approved_budget": payload.get("approved_budget"),
+            "notes": payload.get("notes"),
+            "created_by": payload.get("created_by", username),
+            "created_at": payload.get("created_at"),
+        },
+    )
+
+    new = _fetch_one("SELECT * FROM workorders WHERE workorder_id=:id", {"id": workorder_id})
+    audit(
+        username,
+        "UPSERT_WORKORDER",
+        f"workorder_id={workorder_id} property_id={payload.get('property_id')} status={payload.get('status')}",
+        entity_table="workorders",
+        entity_id=workorder_id,
+        operation="UPSERT",
+        old_data=old,
+        new_data=new,
+        changed_fields=_diff_fields(old, new),
+    )
+
+    ensure_default_milestones(payload.get("section"), payload.get("property_id"), username)
+
+    # Auto milestone advance
+    if str(payload.get("status", "")).lower() in ["open", "assigned", "in progress"]:
+        exec_sql("""UPDATE milestones SET status='Done', updated_at=NOW()
+                    WHERE section=:s AND property_id=:pid AND name='Workorder Issued'""",
+                 {"s": payload.get("section"), "pid": str(payload.get("property_id"))})
+    if str(payload.get("status", "")).lower() == "installed":
+        exec_sql("""UPDATE milestones SET status='Done', completed_on=NOW()::text, updated_at=NOW()
+                    WHERE section=:s AND property_id=:pid AND name='Installed'""",
+                 {"s": payload.get("section"), "pid": str(payload.get("property_id"))})
+
+def update_milestone(milestone_id: str, status: str, owner: str, due_date: str, notes: str, username: str):
+    old = _fetch_one("SELECT * FROM milestones WHERE milestone_id=:id", {"id": milestone_id})
+    exec_sql(
+        """
+        UPDATE milestones
+        SET status=:st,
+            owner=:own,
+            due_date=:due,
+            notes=:notes,
+            completed_on = CASE WHEN :st='Done' THEN COALESCE(completed_on, NOW()::text) ELSE completed_on END,
+            updated_at=NOW()
+        WHERE milestone_id=:id
+        """,
+        {"id": milestone_id, "st": status, "own": owner, "due": due_date, "notes": notes},
+    )
+    new = _fetch_one("SELECT * FROM milestones WHERE milestone_id=:id", {"id": milestone_id})
+    audit(
+        username,
+        "UPDATE_MILESTONE",
+        f"milestone_id={milestone_id} status={status}",
+        entity_table="milestones",
+        entity_id=milestone_id,
+        operation="UPDATE",
+        old_data=old,
+        new_data=new,
+        changed_fields=_diff_fields(old, new),
+    )
+
+# =========================================================
+# MAP HELPERS (Module-1 Step B2)
+# =========================================================
+
+def _pick_cols(table: str, candidates: list[str]) -> list[str]:
+    """Return only columns that exist in DB table (avoids SQL errors)."""
+    out = []
+    for c in candidates:
+        try:
+            if column_exists(table, c):
+                out.append(c)
+        except Exception:
+            # if anything goes wrong, skip column
+            continue
+    return out
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def map_inventory_df(limit: int = 5000) -> pd.DataFrame:
+    """
+    Pull inventory_sites rows that have coordinates.
+    This function auto-selects optional columns only if they exist,
+    so it won't break your app.
+    """
+    base_cols = ["property_id", "property_name", "city", "district", "latitude", "longitude"]
+
+    optional_cols = _pick_cols(
+        "inventory_sites",
+        [
+            "property_code",
+            "site_rating",
+            "no_screens_installed",
+            "contact_person",
+            "contact_details",
+            "agreed_rent_pm",
+            "notes",
+            "last_updated",
+        ],
+    )
+
+    cols = base_cols + [c for c in optional_cols if c not in base_cols]
+
+    sql = f"""
+        SELECT {", ".join(cols)}
+        FROM inventory_sites
+        WHERE latitude IS NOT NULL
+          AND longitude IS NOT NULL
+        ORDER BY {("last_updated" if "last_updated" in cols else "property_name")} DESC
+        LIMIT {int(limit)}
+    """
+    return qdf(sql)
+
+
+def _str_contains(series: pd.Series, q: str) -> pd.Series:
+    q = (q or "").strip().lower()
+    if not q:
+        return pd.Series([True] * len(series), index=series.index)
+    return series.fillna("").astype(str).str.lower().str.contains(q, na=False)
+
+
+# =========================================================
+# LEADS PIPELINE — UI HELPERS (ADD ONLY)
+# =========================================================
+
+def _init_leads_filters_state():
+    if "lp_filters" not in st.session_state:
+        st.session_state["lp_filters"] = {
+            "q": "",
+            "status": [],
+            "assignee": "",
+            "page": 1,
+            "page_size": 200,
+            "view_mode": "Table",  # Table | Cards
+            "compact": True,
+        }
+
+def _applied_filters_summary(f: dict) -> list[str]:
+    chips = []
+    if (f.get("q") or "").strip():
+        chips.append(f"Search: {f['q'].strip()}")
+    if f.get("status"):
+        chips.append("Status: " + ", ".join(map(str, f["status"])))
+    if (f.get("assignee") or "").strip():
+        chips.append(f"Assignee: {f['assignee'].strip()}")
+    return chips
+
+def _ensure_search_col(df: pd.DataFrame) -> pd.DataFrame:
+    if "__search" in df.columns:
+        return df
+    cols = [c for c in [
+        "Property Name", "Property Address", "City", "District",
+        "Promoter / Developer Name", "Promoter Mobile Number", "Promoter Email"
+    ] if c in df.columns]
+    if not cols:
+        df["__search"] = ""
+        return df
+    df["__search"] = (
+        df[cols].fillna("").astype("string").agg(" | ".join, axis=1).str.lower()
+    )
+    return df
+
+def _apply_leads_filters(df_in: pd.DataFrame, f: dict) -> pd.DataFrame:
+    df = df_in.copy()
+    df = _ensure_search_col(df)
+
+    q = (f.get("q") or "").strip().lower()
+    if q:
+        df = df[df["__search"].astype("string").str.contains(q, na=False)]
+
+    st_filter = f.get("status") or []
+    if st_filter and "status" in df.columns:
+        df = df[df["status"].isin(st_filter)]
+
+    assignee = (f.get("assignee") or "").strip()
+    if assignee and "assigned_to" in df.columns:
+        df = df[df["assigned_to"].astype("string").str.contains(assignee, case=False, na=False)]
+
+    return df
+
+def _paginate_df(df: pd.DataFrame, page: int, page_size: int) -> tuple[pd.DataFrame, int]:
+    page_size = max(25, int(page_size or 200))
+    total = int(len(df))
+    pages = max(1, int(np.ceil(total / page_size))) if total else 1
+    page = max(1, min(int(page or 1), pages))
+    start = (page - 1) * page_size
+    end = start + page_size
+    return df.iloc[start:end].copy(), pages
+
+def _lead_label(row: pd.Series) -> str:
+    name = str(row.get("Property Name", "") or "").strip()
+    city = str(row.get("City", "") or "").strip()
+    mob = str(row.get("Promoter Mobile Number", "") or "").strip()
+    bits = [b for b in [name, city, mob] if b]
+    return " | ".join(bits) if bits else str(row.get("__hash", "") or "")
+
+def _cards_view(df: pd.DataFrame, id_col="__hash"):
+    if df is None or len(df) == 0:
+        st.info("No results. Try clearing filters.")
+        return
+
+    df2 = df.head(100).copy()
+    for _, r in df2.iterrows():
+        rid = str(r.get(id_col, "") or "")
+        title = _lead_label(r)
+        with st.expander(title, expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**District:**", r.get("District", ""))
+                st.write("**City:**", r.get("City", ""))
+                st.write("**Status:**", r.get("status", ""))
+                st.write("**Assigned:**", r.get("assigned_to", ""))
+            with c2:
+                st.write("**Promoter:**", r.get("Promoter / Developer Name", ""))
+                st.write("**Mobile:**", r.get("Promoter Mobile Number", ""))
+                st.write("**Email:**", r.get("Promoter Email", ""))
+                st.write("**Follow-up:**", r.get("follow_up", ""))
+            addr = str(r.get("Property Address", "") or "")
+            if addr:
+                st.write("**Address:**", addr)
+            notes = str(r.get("notes", "") or "")
+            if notes:
+                st.write("**Notes:**", notes)
+            st.caption(f"Record: {rid}")
+
+
+
+# =========================================================
+# INVENTORY (SITES) — UI HELPERS (ADD ONLY)
+# =========================================================
+
+@st.cache_data(show_spinner=False, ttl=180)
+def _load_inventory_sites_cached(limit: int = 2000) -> pd.DataFrame:
+    # Read-only cached fetch for snappy UI
+    limit = int(limit or 2000)
+    limit = max(100, min(limit, 20000))
+    return qdf(
+        """SELECT property_id, property_code, district, city, property_name, property_address,
+                  contact_person, contact_details, no_screens_installed, agreed_rent_pm, last_updated
+           FROM inventory_sites
+           ORDER BY last_updated DESC
+           LIMIT :lim""",
+        {"lim": limit},
+    )
+
+def _init_inv_filters_state():
+    if "inv_filters" not in st.session_state:
+        st.session_state["inv_filters"] = {
+            "q": "",
+            "district": [],
+            "city": [],
+            "min_screens": None,
+            "page": 1,
+            "page_size": 200,
+            "view_mode": "Table",  # Table | Cards
+            "compact": True,
+            "limit": 2000,
+        }
+
+def _ensure_inv_search(df: pd.DataFrame) -> pd.DataFrame:
+    if "__search" in df.columns:
+        return df
+    cols = [c for c in [
+        "property_code", "district", "city", "property_name", "property_address",
+        "contact_person", "contact_details"
+    ] if c in df.columns]
+    if not cols:
+        df["__search"] = ""
+        return df
+    df["__search"] = df[cols].fillna("").astype("string").agg(" | ".join, axis=1).str.lower()
+    return df
+
+def _apply_inventory_filters(df_in: pd.DataFrame, f: dict) -> pd.DataFrame:
+    df = df_in.copy()
+    df = _ensure_inv_search(df)
+
+    q = (f.get("q") or "").strip().lower()
+    if q:
+        df = df[df["__search"].astype("string").str.contains(q, na=False)]
+
+    dsel = f.get("district") or []
+    if dsel and "district" in df.columns:
+        df = df[df["district"].isin(dsel)]
+
+    csel = f.get("city") or []
+    if csel and "city" in df.columns:
+        df = df[df["city"].isin(csel)]
+
+    min_s = f.get("min_screens", None)
+    if min_s is not None and "no_screens_installed" in df.columns:
+        try:
+            min_s = int(min_s)
+            df = df[pd.to_numeric(df["no_screens_installed"], errors="coerce").fillna(0) >= min_s]
+        except Exception:
+            pass
+
+    return df
+
+def _inventory_label(row: pd.Series) -> str:
+    code = str(row.get("property_code", "") or "").strip()
+    name = str(row.get("property_name", "") or "").strip()
+    city = str(row.get("city", "") or "").strip()
+    bits = [b for b in [code, name, city] if b]
+    return " | ".join(bits) if bits else str(row.get("property_id", "") or "")
+
+def _inventory_cards_view(df: pd.DataFrame):
+    if df is None or len(df) == 0:
+        st.info("No results. Try clearing filters.")
+        return
+
+    df2 = df.head(120).copy()
+    for _, r in df2.iterrows():
+        title = _inventory_label(r)
+        with st.expander(title, expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**District:**", r.get("district", ""))
+                st.write("**City:**", r.get("city", ""))
+                st.write("**Screens installed:**", r.get("no_screens_installed", ""))
+                st.write("**Agreed rent (PM):**", r.get("agreed_rent_pm", ""))
+            with c2:
+                st.write("**Contact person:**", r.get("contact_person", ""))
+                st.write("**Contact details:**", r.get("contact_details", ""))
+                st.write("**Last updated:**", r.get("last_updated", ""))
+            addr = str(r.get("property_address", "") or "")
+            if addr:
+                st.write("**Address:**", addr)
+
+# =========================================================
+# DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL
+# =========================================================
+import os
+import socket
+from urllib.parse import urlparse
+
+import pandas as pd
+import streamlit as st
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
+from sqlalchemy.exc import SQLAlchemyError
+
+
+def get_database_url() -> str:
+    # Priority: Streamlit Secrets -> Env var
+    try:
+        if "DATABASE_URL" in st.secrets:
+            return str(st.secrets["DATABASE_URL"]).strip()
+    except Exception:
+        pass
+    return os.environ.get("DATABASE_URL", "").strip()
+
+
+def _force_psycopg3(url: str) -> str:
+    u = (url or "").strip()
+    if u.startswith("postgres://"):
+        u = u.replace("postgres://", "postgresql://", 1)
+    if u.startswith("postgresql://") and "+psycopg" not in u:
+        u = u.replace("postgresql://", "postgresql+psycopg://", 1)
+    return u
+
+
+def _resolve_ipv4(host: str) -> str | None:
+    try:
+        infos = socket.getaddrinfo(host, None, family=socket.AF_INET, type=socket.SOCK_STREAM)
+        if infos:
+            return infos[0][4][0]
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_resource(show_spinner=False)
+def db_engine():
+    db_url = get_database_url()
+    if not db_url:
+        st.error("DATABASE_URL not found. Add it to Streamlit Secrets.")
+        st.stop()
+
+    url = _force_psycopg3(db_url)
+
+    # Resolve IPv4 (fixes common Streamlit Cloud IPv6 connect issue)
+    parsed = urlparse(url.replace("postgresql+psycopg://", "postgresql://", 1))
+    host = parsed.hostname or ""
+    connect_args = {}
+    ipv4 = _resolve_ipv4(host)
+    if ipv4:
+        connect_args["hostaddr"] = ipv4
+
+    eng = create_engine(
+        url,
+        pool_pre_ping=True,
+        poolclass=NullPool,   # safer with Supabase pooler/PgBouncer
+        connect_args=connect_args,
+    )
+
+    # Smoke test (fast fail)
+    with eng.connect() as conn:
+        conn.execute(text("SELECT 1"))
+
+    return eng
+
+
+def exec_sql(sql: str, params: dict | None = None) -> None:
+    try:
+        with db_engine().begin() as conn:
+            conn.execute(text(sql), params or {})
+    except SQLAlchemyError as e:
+        st.error("Database error while executing SQL.")
+        st.code(str(e))
+        st.stop()
+
+
+def qdf(sql: str, params: dict | None = None) -> pd.DataFrame:
+    try:
+        with db_engine().connect() as conn:
+            return pd.read_sql(text(sql), conn, params=params or {})
+    except SQLAlchemyError as e:
+        st.error("Database error while reading data.")
+        st.code(str(e))
+        st.stop()
+
+# =========================================================
+# DB MIGRATIONS + SEED (RUN ONCE PER SERVER)
+# =========================================================
+@st.cache_resource(show_spinner=False)
+def init_db_once():
+    # --- Core tables ---
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS users(
+      username TEXT PRIMARY KEY,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL,
+      section_scope TEXT NOT NULL DEFAULT 'Both',
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      last_login_at TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS permissions(
+      role TEXT NOT NULL,
+      section TEXT NOT NULL,
+      can_view INTEGER NOT NULL DEFAULT 0,
+      can_add INTEGER NOT NULL DEFAULT 0,
+      can_edit INTEGER NOT NULL DEFAULT 0,
+      can_delete INTEGER NOT NULL DEFAULT 0,
+      can_export INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(role, section)
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS audit_logs(
+      log_id TEXT PRIMARY KEY,
+      username TEXT,
+      action_type TEXT,
+      details TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS property_codes(
+      property_id TEXT PRIMARY KEY,
+      property_code TEXT UNIQUE,
+      district TEXT,
+      city TEXT,
+      property_name TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS lead_updates(
+      record_hash TEXT NOT NULL,
+      section TEXT NOT NULL,
+      status TEXT,
+      assigned_to TEXT,
+      lead_source TEXT,
+      notes TEXT,
+      follow_up TEXT,
+      last_call_outcome TEXT,
+      last_call_at TIMESTAMP,
+      last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(record_hash, section)
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS inventory_sites(
+      property_id TEXT PRIMARY KEY,
+      property_code TEXT,
+      district TEXT,
+      city TEXT,
+      property_name TEXT,
+      property_address TEXT,
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
+      date_of_contract TEXT,
+      contract_period TEXT,
+      screen_installed_date TEXT,
+      contract_terms TEXT,
+      site_rating INTEGER,
+      chairman_name TEXT,
+      contact_person TEXT,
+      contact_details TEXT,
+      no_screens_installed INTEGER DEFAULT 0,
+      agreed_rent_pm DOUBLE PRECISION,
+      notes TEXT,
+      last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # --- Optional tables ---
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS interactions(
+      id TEXT PRIMARY KEY,
+      record_hash TEXT NOT NULL,
+      section TEXT NOT NULL,
+      interaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      mode TEXT NOT NULL,
+      remarks TEXT,
+      next_follow_up_date TEXT,
+      created_by TEXT,
+      attachment_url TEXT
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS lead_status_history(
+      id TEXT PRIMARY KEY,
+      record_hash TEXT NOT NULL,
+      section TEXT NOT NULL,
+      status_from TEXT,
+      status_to TEXT NOT NULL,
+      changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      changed_by TEXT,
+      note TEXT
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS tasks(
+      id TEXT PRIMARY KEY,
+      record_hash TEXT,
+      section TEXT,
+      title TEXT NOT NULL,
+      task_type TEXT,
+      priority TEXT DEFAULT 'Medium',
+      status TEXT DEFAULT 'Open',
+      assigned_to TEXT,
+      due_date TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      created_by TEXT,
+      notes TEXT
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS screens(
+      screen_id TEXT PRIMARY KEY,
+      property_id TEXT NOT NULL,
+      screen_location TEXT,
+      installed_date TEXT,
+      installed_by TEXT,
+      last_service_date TEXT,
+      next_service_due TEXT,
+      is_active INTEGER DEFAULT 1,
+      last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS agreements(
+      agreement_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      property_id TEXT,
+      property_code TEXT,
+      party_name TEXT,
+      start_date TEXT,
+      end_date TEXT,
+      renewal_type TEXT,
+      rent_pm DOUBLE PRECISION,
+      billing_cycle TEXT,
+      status TEXT,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS payments(
+      payment_id TEXT PRIMARY KEY,
+      agreement_id TEXT,
+      section TEXT NOT NULL,
+      property_id TEXT,
+      due_date TEXT,
+      amount DOUBLE PRECISION,
+      status TEXT,
+      paid_date TEXT,
+      payment_mode TEXT,
+      reference_no TEXT,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS documents_vault(
+      doc_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      property_id TEXT,
+      doc_type TEXT,
+      filename TEXT,
+      storage_path TEXT,
+      issue_date TEXT,
+      expiry_date TEXT,
+      uploaded_by TEXT,
+      uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS manual_leads(
+      lead_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      district TEXT,
+      city TEXT,
+      property_name TEXT,
+      property_address TEXT,
+      promoter_name TEXT,
+      promoter_mobile TEXT,
+      promoter_email TEXT,
+      property_type TEXT,
+      property_status TEXT,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS ad_inventory(
+      ad_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      property_id TEXT,
+      screen_id TEXT,
+      slot_name TEXT,
+      start_date TEXT,
+      end_date TEXT,
+      rate DOUBLE PRECISION,
+      status TEXT,
+      client_name TEXT,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # --- Indexes ---
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_lead_updates_section_updated ON lead_updates(section, last_updated DESC)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_inventory_search ON inventory_sites(property_code, district, city, property_name)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_screens_property ON screens(property_id)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_agreements_pid ON agreements(property_id)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_payments_due ON payments(section, due_date)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_docs_vault_prop ON documents_vault(property_id)")
+
+    # =========================================================
+    # STEP-2 TABLES (Module-1): surveys, workorders, milestones
+    # =========================================================
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS surveys(
+      survey_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      property_id TEXT NOT NULL,
+      status TEXT DEFAULT 'Draft',
+      scheduled_on TEXT,
+      completed_on TEXT,
+      surveyor TEXT,
+      contact_person TEXT,
+      contact_details TEXT,
+      site_feasible INTEGER DEFAULT 1,
+      power_available INTEGER DEFAULT 1,
+      internet_available INTEGER DEFAULT 1,
+      mounting_type TEXT,
+      screen_size TEXT,
+      visibility_score INTEGER,
+      footfall_estimate INTEGER,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS workorders(
+      workorder_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      property_id TEXT NOT NULL,
+      status TEXT DEFAULT 'Open',
+      priority TEXT DEFAULT 'Medium',
+      assigned_to TEXT,
+      planned_install_date TEXT,
+      installed_on TEXT,
+      installer_name TEXT,
+      installer_contact TEXT,
+      material_required TEXT,
+      estimated_cost DOUBLE PRECISION,
+      approved_budget DOUBLE PRECISION,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS milestones(
+      milestone_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      property_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT DEFAULT 'Pending',
+      due_date TEXT,
+      completed_on TEXT,
+      owner TEXT,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # Indexes (safe)
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_surveys_section_property ON surveys(section, property_id)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_surveys_status ON surveys(section, status)")
+
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_workorders_section_property ON workorders(section, property_id)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_workorders_status ON workorders(section, status)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_workorders_assigned_to ON workorders(section, assigned_to)")
+
+    exec_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_milestones_property_name ON milestones(section, property_id, name)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_milestones_status ON milestones(section, status)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_milestones_due ON milestones(section, due_date)")
+
+    
+    # --- Seed permissions if empty ---
+    c = int(qdf("SELECT COUNT(*) AS c FROM permissions").iloc[0]["c"] or 0)
+    if c == 0:
+        seed = [
+            ("Super Admin", "*", 1, 1, 1, 1, 1),
+            ("Head Ops", "*", 1, 1, 1, 0, 1),
+            ("Installation Manager", "Installation", 1, 1, 1, 0, 1),
+            ("Advertisement Manager", "Advertisement", 1, 1, 1, 0, 1),
+            ("Field Team (Installation)", "Installation", 1, 1, 1, 0, 0),
+            ("Field Team (Advertisement)", "Advertisement", 1, 1, 1, 0, 0),
+            ("Viewer", "*", 1, 0, 0, 0, 0),
+        ]
+        for role, sec, v, a, e, d, x in seed:
+            exec_sql("""
+            INSERT INTO permissions(role, section, can_view, can_add, can_edit, can_delete, can_export)
+            VALUES(:r,:s,:v,:a,:e,:d,:x)
+            """, {"r": role, "s": sec, "v": v, "a": a, "e": e, "d": d, "x": x})
+
+    return True
+
+
+# ✅ Run DB init once per server
+init_db_once()
+
+
+# =========================================================
+
+# =========================================================
+# PORTED HELPERS FROM v7 -> 5.03 (SUPABASE SAFE)
+# (Commit: helpers only; no UI changes)
+# =========================================================
+
+def _empty_df() -> pd.DataFrame:
+    return pd.DataFrame()
+
+def _safe_table(table: str) -> bool:
+    try:
+        return table_exists(table)
+    except Exception:
+        return False
+
+def norm(x):
+    if x is None:
+        return ""
+    return str(x).strip()
+
+def save_upload(upload, subdir: str, prefix: str, property_code: str = "") -> tuple[str, str]:
+    """Save uploaded file locally (Streamlit Cloud: ephemeral). Returns (filename, storage_path)."""
+    if not upload:
+        return ("", "")
+    try:
+        name = getattr(upload, "name", "upload.bin")
+        ext = name.split(".")[-1].lower() if "." in name else "bin"
+    except Exception:
+        ext = "bin"
+
+    safe_code = re.sub(r"[^A-Za-z0-9_\-]", "_", (property_code or "PROP"))[:20]
+    safe_prefix = re.sub(r"[^A-Za-z0-9_\-]", "_", (prefix or "DOC"))[:30]
+    fname = f"{safe_code}_{safe_prefix}_{uuid.uuid4().hex}.{ext}"
+
+    root = Path("uploads_docs") / subdir
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / fname
+    with open(path, "wb") as fp:
+        fp.write(upload.getbuffer())
+
+    return fname, str(path)
+
+# -----------------------------
+# USERS
+# -----------------------------
+def list_users() -> pd.DataFrame:
+    if not _safe_table("users"):
+        return _empty_df()
+    return qdf(
+        """SELECT username, role, section_scope, is_active, created_at, updated_at, last_login_at
+           FROM users
+           ORDER BY username"""
+    )
+
+# -----------------------------
+# MANUAL LEADS
+# -----------------------------
+def list_manual_leads(section: str | None = None) -> pd.DataFrame:
+    if not _safe_table("manual_leads"):
+        return _empty_df()
+    if section:
+        return qdf(
+            """SELECT * FROM manual_leads
+               WHERE section = :s
+               ORDER BY created_at DESC""",
+            {"s": section},
+        )
+    return qdf("SELECT * FROM manual_leads ORDER BY created_at DESC")
+
+def insert_manual_lead(payload: dict) -> None:
+    if not _safe_table("manual_leads"):
+        st.error("manual_leads table not found. Run DB migration/init_db_once.")
+        return
+
+    a = current_auth()
+    lead_id = payload.get("lead_id") or str(uuid.uuid4())
+    created_by = (payload.get("created_by") or a["user"] or "").strip()
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="add",
+        role=a["role"],
+        username=a["user"],
+        entity_table="manual_leads",
+        entity_id=str(lead_id),
+        entity_assigned_to=created_by,  # for assignee-restricted roles, must be self
+        operation="INSERT",
+        sql="""INSERT INTO manual_leads(
+              lead_id, section, district, city, property_name, property_address,
+              promoter_name, promoter_mobile, promoter_email, property_type, property_status,
+              notes, created_by, created_at, updated_at
+            )
+            VALUES(
+              :lead_id, :section, :district, :city, :property_name, :property_address,
+              :promoter_name, :promoter_mobile, :promoter_email, :property_type, :property_status,
+              :notes, :created_by, NOW(), NOW()
+            )""",
+        params={
+            "lead_id": lead_id,
+            "section": payload.get("section") or SECTION,
+            "district": payload.get("district") or "",
+            "city": payload.get("city") or "",
+            "property_name": payload.get("property_name") or "",
+            "property_address": payload.get("property_address") or "",
+            "promoter_name": payload.get("promoter_name") or "",
+            "promoter_mobile": payload.get("promoter_mobile") or "",
+            "promoter_email": payload.get("promoter_email") or "",
+            "property_type": payload.get("property_type") or "",
+            "property_status": payload.get("property_status") or "",
+            "notes": payload.get("notes") or "",
+            "created_by": created_by,
+        },
+        old_row_sql=None,
+        new_row_sql="SELECT * FROM manual_leads WHERE lead_id=:id",
+        new_row_params={"id": lead_id},
+        details=f"manual_lead created lead_id={lead_id}",
+        allow_assign=True,
+    )
+
+
+def list_inventory(limit: int = 500) -> pd.DataFrame:
+    if not _safe_table("inventory_sites"):
+        return _empty_df()
+    return qdf(
+        f"""SELECT *
+           FROM inventory_sites
+           ORDER BY last_updated DESC
+           LIMIT {int(limit)}"""
+    )
+
+def list_screens(property_id: str | None = None, limit: int = 500) -> pd.DataFrame:
+    if not _safe_table("screens"):
+        return _empty_df()
+    if property_id:
+        return qdf(
+            f"""SELECT *
+               FROM screens
+               WHERE property_id = :pid
+               ORDER BY last_updated DESC
+               LIMIT {int(limit)}""",
+            {"pid": property_id},
+        )
+    return qdf(
+        f"""SELECT *
+           FROM screens
+           ORDER BY last_updated DESC
+           LIMIT {int(limit)}"""
+    )
+
+def update_inventory_screen_count(property_id: str) -> None:
+    if not (_safe_table("screens") and _safe_table("inventory_sites")):
+        return
+    df = qdf("SELECT COUNT(*) AS c FROM screens WHERE property_id = :pid", {"pid": property_id})
+    cnt = int(df.iloc[0]["c"] or 0) if len(df) else 0
+    exec_sql(
+        """UPDATE inventory_sites
+           SET no_screens_installed = :c,
+               last_updated = NOW()
+           WHERE property_id = :pid""",
+        {"c": cnt, "pid": property_id},
+    )
+
+def upsert_inventory(payload: dict, username: str | None = None) -> None:
+    if not _safe_table("inventory_sites"):
+        st.error("inventory_sites table not found. Run DB migration/init_db_once.")
+        return
+
+    a = current_auth()
+    user = username or a["user"]
+    property_id = payload.get("property_id") or str(uuid.uuid4())
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="edit",
+        role=a["role"],
+        username=user,
+        entity_table="inventory_sites",
+        entity_id=str(property_id),
+        entity_assigned_to=(payload.get("assigned_to") or user),  # if you later add assigned_to
+        operation="UPSERT",
+        sql="""INSERT INTO inventory_sites(property_id,property_code,district,city,property_name,property_address,latitude,longitude,contact_person,contact_details,agreed_rent_pm,site_rating,notes,last_updated)
+               VALUES(:property_id,:property_code,:district,:city,:property_name,:property_address,:latitude,:longitude,:contact_person,:contact_details,:agreed_rent_pm,:site_rating,:notes,NOW())
+               ON CONFLICT(property_id) DO UPDATE SET
+                 property_code=EXCLUDED.property_code,
+                 district=EXCLUDED.district,
+                 city=EXCLUDED.city,
+                 property_name=EXCLUDED.property_name,
+                 property_address=EXCLUDED.property_address,
+                 latitude=EXCLUDED.latitude,
+                 longitude=EXCLUDED.longitude,
+                 contact_person=EXCLUDED.contact_person,
+                 contact_details=EXCLUDED.contact_details,
+                 agreed_rent_pm=EXCLUDED.agreed_rent_pm,
+                 site_rating=EXCLUDED.site_rating,
+                 notes=EXCLUDED.notes,
+                 last_updated=NOW()""",
+        params={
+            "property_id": property_id,
+            "property_code": payload.get("property_code") or "",
+            "district": payload.get("district") or "",
+            "city": payload.get("city") or "",
+            "property_name": payload.get("property_name") or "",
+            "property_address": payload.get("property_address") or "",
+            "latitude": payload.get("latitude") or "",
+            "longitude": payload.get("longitude") or "",
+            "contact_person": payload.get("contact_person") or "",
+            "contact_details": payload.get("contact_details") or "",
+            "agreed_rent_pm": payload.get("agreed_rent_pm") or "",
+            "site_rating": payload.get("site_rating") or 3,
+            "notes": payload.get("notes") or "",
+        },
+        old_row_sql="SELECT * FROM inventory_sites WHERE property_id=:id",
+        old_row_params={"id": property_id},
+        new_row_sql="SELECT * FROM inventory_sites WHERE property_id=:id",
+        new_row_params={"id": property_id},
+        details=f"inventory upsert property_id={property_id}",
+        allow_assign=True,
+    )
+
+
+def upsert_screen(payload: dict, username: str | None = None) -> None:
+    if not _safe_table("screens"):
+        st.error("screens table not found. Run DB migration/init_db_once.")
+        return
+
+    a = current_auth()
+    user = username or a["user"]
+    sid = payload.get("screen_id") or str(uuid.uuid4())
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="edit",
+        role=a["role"],
+        username=user,
+        entity_table="screens",
+        entity_id=str(sid),
+        entity_assigned_to=(payload.get("assigned_to") or user),  # if you later add assigned_to
+        operation="UPSERT",
+        sql="""
+            INSERT INTO screens(screen_id, property_id, screen_location, installed_by, installed_date, last_service_date, next_service_due, is_active, last_updated)
+            VALUES(:sid,:pid,:loc,:by,:idate,:lsd,:nsd,:act,NOW())
+            ON CONFLICT(screen_id) DO UPDATE SET
+              property_id=EXCLUDED.property_id,
+              screen_location=EXCLUDED.screen_location,
+              installed_by=EXCLUDED.installed_by,
+              installed_date=EXCLUDED.installed_date,
+              last_service_date=EXCLUDED.last_service_date,
+              next_service_due=EXCLUDED.next_service_due,
+              is_active=EXCLUDED.is_active,
+              last_updated=NOW()
+        """,
+        params={
+            "sid": sid,
+            "pid": payload.get("property_id"),
+            "loc": payload.get("screen_location") or "",
+            "by": payload.get("installed_by") or user,
+            "idate": payload.get("installed_date") or "",
+            "lsd": payload.get("last_service_date") or "",
+            "nsd": payload.get("next_service_due") or "",
+            "act": 1 if int(payload.get("is_active", 1) or 1) else 0,
+        },
+        old_row_sql="SELECT * FROM screens WHERE screen_id=:id",
+        old_row_params={"id": sid},
+        new_row_sql="SELECT * FROM screens WHERE screen_id=:id",
+        new_row_params={"id": sid},
+        details=f"screen upsert screen_id={sid}",
+        allow_assign=True,
+    )
+
+
+def mark_serviced(screen_id: str, last_service_date: str, next_service_due: str, by_user: str, section: str):
+    a = current_auth()
+    audited_write(
+        section=section,
+        action="edit",
+        role=a["role"],
+        username=a["user"],
+        entity_table="screens",
+        entity_id=str(screen_id),
+        entity_assigned_to=(by_user or a["user"]),
+        operation="UPDATE",
+        sql="UPDATE screens SET last_service_date=:ls, next_service_due=:nd, last_updated=NOW() WHERE screen_id=:sid",
+        params={"ls": last_service_date, "nd": next_service_due, "sid": screen_id},
+        old_row_sql="SELECT * FROM screens WHERE screen_id=:sid",
+        old_row_params={"sid": screen_id},
+        new_row_sql="SELECT * FROM screens WHERE screen_id=:sid",
+        new_row_params={"sid": screen_id},
+        details=f"mark_serviced screen_id={screen_id}",
+        allow_assign=True,
+    )
+
+
+def list_agreements(property_id: str | None = None, limit: int = 500) -> pd.DataFrame:
+    if not _safe_table("agreements"):
+        return _empty_df()
+    if property_id:
+        return qdf(
+            f"""SELECT *
+               FROM agreements
+               WHERE property_id = :pid
+               ORDER BY updated_at DESC
+               LIMIT {int(limit)}""",
+            {"pid": property_id},
+        )
+    return qdf(f"SELECT * FROM agreements ORDER BY updated_at DESC LIMIT {int(limit)}")
+
+def add_agreement(payload: dict, username: str | None = None):
+    if not _safe_table("agreements"):
+        st.error("agreements table not found. Run DB migration/init_db_once.")
+        return
+    a = current_auth()
+    user = username or a["user"]
+    agid = payload.get("agreement_id") or str(uuid.uuid4())
+    created_by = (payload.get("created_by") or user or "").strip()
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="add",
+        role=a["role"],
+        username=user,
+        entity_table="agreements",
+        entity_id=str(agid),
+        entity_assigned_to=created_by,
+        operation="INSERT",
+        sql="""INSERT INTO agreements(agreement_id,record_hash,section,agreement_no,agreement_date,party_name,amount,status,notes,created_by,created_at)
+               VALUES(:id,:h,:s,:no,:dt,:party,:amt,:st,:n,:by,NOW())""",
+        params={
+            "id": agid,
+            "h": payload.get("record_hash"),
+            "s": payload.get("section") or SECTION,
+            "no": payload.get("agreement_no") or "",
+            "dt": payload.get("agreement_date") or "",
+            "party": payload.get("party_name") or "",
+            "amt": payload.get("amount") or "",
+            "st": payload.get("status") or "Draft",
+            "n": payload.get("notes") or "",
+            "by": created_by,
+        },
+        old_row_sql=None,
+        new_row_sql="SELECT * FROM agreements WHERE agreement_id=:id",
+        new_row_params={"id": agid},
+        details=f"agreement created agreement_id={agid}",
+        allow_assign=True,
+    )
+
+
+def list_payments(limit: int = 800) -> pd.DataFrame:
+    if not _safe_table("payments"):
+        return _empty_df()
+    return qdf(f"SELECT * FROM payments ORDER BY created_at DESC LIMIT {int(limit)}")
+
+def add_payment(payload: dict, username: str | None = None):
+    if not _safe_table("payments"):
+        st.error("payments table not found. Run DB migration/init_db_once.")
+        return
+    a = current_auth()
+    user = username or a["user"]
+    pid = payload.get("payment_id") or str(uuid.uuid4())
+    created_by = (payload.get("created_by") or user or "").strip()
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="add",
+        role=a["role"],
+        username=user,
+        entity_table="payments",
+        entity_id=str(pid),
+        entity_assigned_to=created_by,
+        operation="INSERT",
+        sql="""INSERT INTO payments(payment_id,record_hash,section,payment_date,amount,mode,reference_no,notes,created_by,created_at)
+               VALUES(:id,:h,:s,:dt,:amt,:m,:ref,:n,:by,NOW())""",
+        params={
+            "id": pid,
+            "h": payload.get("record_hash"),
+            "s": payload.get("section") or SECTION,
+            "dt": payload.get("payment_date") or "",
+            "amt": payload.get("amount") or "",
+            "m": payload.get("mode") or "",
+            "ref": payload.get("reference_no") or "",
+            "n": payload.get("notes") or "",
+            "by": created_by,
+        },
+        old_row_sql=None,
+        new_row_sql="SELECT * FROM payments WHERE payment_id=:id",
+        new_row_params={"id": pid},
+        details=f"payment created payment_id={pid}",
+        allow_assign=True,
+    )
+
+
+def list_documents(property_id: str | None = None, limit: int = 800) -> pd.DataFrame:
+    if not _safe_table("documents_vault"):
+        return _empty_df()
+    if property_id:
+        return qdf(
+            f"""SELECT *
+               FROM documents_vault
+               WHERE property_id = :pid
+               ORDER BY uploaded_at DESC
+               LIMIT {int(limit)}""",
+            {"pid": property_id},
+        )
+    return qdf(f"SELECT * FROM documents_vault ORDER BY uploaded_at DESC LIMIT {int(limit)}")
+
+def add_document(payload: dict, username: str | None = None):
+    if not _safe_table("documents_vault"):
+        st.error("documents_vault table not found. Run DB migration/init_db_once.")
+        return
+    a = current_auth()
+    user = username or a["user"]
+    doc_id = payload.get("doc_id") or str(uuid.uuid4())
+    created_by = (payload.get("uploaded_by") or payload.get("created_by") or user or "").strip()
+
+    audited_write(
+        section=payload.get("section") or SECTION,
+        action="add",
+        role=a["role"],
+        username=user,
+        entity_table="documents_vault",
+        entity_id=str(doc_id),
+        entity_assigned_to=created_by,
+        operation="INSERT",
+        sql="""INSERT INTO documents_vault(doc_id,record_hash,section,doc_type,doc_title,file_url,uploaded_by,uploaded_at,notes)
+               VALUES(:id,:h,:s,:t,:ttl,:url,:by,NOW(),:n)""",
+        params={
+            "id": doc_id,
+            "h": payload.get("record_hash"),
+            "s": payload.get("section") or SECTION,
+            "t": payload.get("doc_type") or "",
+            "ttl": payload.get("doc_title") or "",
+            "url": payload.get("file_url") or "",
+            "by": created_by,
+            "n": payload.get("notes") or "",
+        },
+        old_row_sql=None,
+        new_row_sql="SELECT * FROM documents_vault WHERE doc_id=:id",
+        new_row_params={"id": doc_id},
+        details=f"document uploaded doc_id={doc_id}",
+        allow_assign=True,
+    )
+
+
+def prop_status(property_id: str) -> str:
+    """Best-effort availability helper (adjust statuses as per your agreements)."""
+    if not _safe_table("agreements"):
+        return "Available"
+    agr = qdf(
+        """SELECT end_date, status
+           FROM agreements
+           WHERE property_id = :pid""",
+        {"pid": property_id},
+    )
+    if len(agr) == 0:
+        return "Available"
+    active = agr[agr["status"].astype("string").str.lower() == "active"]
+    return "Active" if len(active) else "Available"
+
+
+# AUTH
+# =========================================================
+def pbkdf2_hash(password: str, salt: str | None = None) -> str:
+    salt = salt or uuid.uuid4().hex
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120_000)
+    return f"pbkdf2_sha256${salt}${dk.hex()}"
+
+
+def pbkdf2_verify(password: str, stored: str) -> bool:
+    try:
+        if stored.startswith("plain$"):
+            return password == stored.split("$", 1)[1]
+        alg, salt, hexhash = stored.split("$", 2)
+        if alg != "pbkdf2_sha256":
+            return False
+        return pbkdf2_hash(password, salt).split("$", 2)[2] == hexhash
+    except Exception:
+        return False
+
+
+def _json_safe(obj):
+    try:
+        import json as _json
+        return _json.dumps(obj, ensure_ascii=False, default=str)
+    except Exception:
+        return str(obj)
+
+
+def audit(
+    user: str,
+    action: str,
+    details: str = "",
+    *,
+    entity_table: str | None = None,
+    entity_id: str | None = None,
+    operation: str | None = None,
+    old_data: dict | None = None,
+    new_data: dict | None = None,
+    changed_fields: list[str] | None = None,
+):
+    """Backward compatible audit logger.
+
+    Old calls: audit(username, action_type, details)
+
+    New extended fields are inserted if the columns exist; otherwise it falls back to
+    the legacy (log_id, username, action_type, details) insert.
+    """
+    log_id = str(uuid.uuid4())
+    u = (user or "").strip() or None
+
+    # Prefer extended insert if columns exist
+    try:
+        has_entity_table = column_exists("audit_logs", "entity_table")
+        has_entity_id = column_exists("audit_logs", "entity_id")
+        has_operation = column_exists("audit_logs", "operation")
+        has_old = column_exists("audit_logs", "old_data")
+        has_new = column_exists("audit_logs", "new_data")
+        has_changed = column_exists("audit_logs", "changed_fields")
+
+        if has_entity_table or has_entity_id or has_operation or has_old or has_new or has_changed:
+            cols = ["log_id", "username", "action_type", "details"]
+            vals = [":id", ":u", ":a", ":d"]
+            params = {"id": log_id, "u": u, "a": action, "d": details or ""}
+
+            if has_entity_table:
+                cols.append("entity_table"); vals.append(":et"); params["et"] = entity_table
+            if has_entity_id:
+                cols.append("entity_id"); vals.append(":eid"); params["eid"] = entity_id
+            if has_operation:
+                cols.append("operation"); vals.append(":op"); params["op"] = operation
+            if has_old:
+                cols.append("old_data"); vals.append("CAST(:od AS jsonb)"); params["od"] = _json_safe(old_data or None)
+            if has_new:
+                cols.append("new_data"); vals.append("CAST(:nd AS jsonb)"); params["nd"] = _json_safe(new_data or None)
+            if has_changed:
+                cols.append("changed_fields"); vals.append("CAST(:cf AS jsonb)"); params["cf"] = _json_safe(changed_fields or None)
+
+            sql = f"INSERT INTO audit_logs({', '.join(cols)}) VALUES({', '.join(vals)})"
+            exec_sql(sql, params)
+            return
+
+    except Exception:
+        # If any of the feature-detection fails, just fall back to legacy insert.
+        pass
+
+    # Legacy insert (always works with your current schema)
+    exec_sql(
+        "INSERT INTO audit_logs(log_id,username,action_type,details) VALUES(:id,:u,:a,:d)",
+        {"id": log_id, "u": u, "a": action, "d": details or ""},
+    )
+
+
+
+def get_user(username: str):
+    df = qdf("SELECT * FROM users WHERE username=:u", {"u": username})
+    return df.iloc[0].to_dict() if len(df) else None
+
+
+def set_last_login(username: str):
+    exec_sql("UPDATE users SET last_login_at=NOW(), updated_at=NOW() WHERE username=:u", {"u": username})
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def load_permissions():
+    # Backward compatible: permissions table may not have can_assign/can_approve yet.
+    cols = ["role","section","can_view","can_add","can_edit","can_delete","can_export"]
+    extra = []
+    if column_exists("permissions", "can_assign"):
+        extra.append("can_assign")
+    if column_exists("permissions", "can_approve"):
+        extra.append("can_approve")
+    sel = ", ".join(cols + extra)
+    return qdf(f"SELECT {sel} FROM permissions")
+
+
+def _perm_val(row: dict, action: str) -> int:
+    return int(row.get(f"can_{action}", 0) or 0)
+
+
+def can(section: str, action: str, role: str) -> bool:
+    # Canonicalize role names (supports legacy role values)
+    r = canonical_role(role, section_scope=st.session_state.get("auth", {}).get("scope"))
+    if r == ROLE_SUPER_ADMIN:
+        return True
+
+    perms = load_permissions()
+    if perms is None or len(perms) == 0:
+        # safe default: view-only
+        return action == "view"
+
+    # Canonicalize roles inside permissions table too
+    perms = perms.copy()
+    perms["__role"] = perms["role"].astype("string").apply(lambda x: canonical_role(str(x or "")))
+    sub = perms[(perms["__role"] == r) & (perms["section"].isin([section, "*"]))]
+
+    if len(sub) == 0:
+        return action == "view"
+
+    spec = sub[sub["section"] == section]
+    row = (spec.iloc[0] if len(spec) else sub.iloc[0]).to_dict()
+    return bool(_perm_val(row, action))
+
+
+def page_title(title: str, subtitle: str, right_html: str = ""):
+    """UI-only header card. Backward compatible with old 2-arg calls."""
+    st.markdown(
+        f"""
+<div class='card'>
+  <div style='display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap;'>
+    <div>
+      <div class='section'>{title}</div>
+      <div class='small'>{subtitle}</div>
+    </div>
+    <div style='display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;'>
+      {right_html}
+    </div>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+# =========================================================
+# UI HELPERS (safe UI-only improvements)
+# =========================================================
+import math
+import streamlit.components.v1 as components
+
+def render_topbar(app_name: str, section: str, user: str, role_label: str, logo_path: str = ""):
+    """Top header bar (brand + module + user + role). Safe UI-only."""
+    st.markdown(
+        f"""
+<div class="topbar">
+  <div class="left">
+    <span class="brand-dot"></span>
+    <div>
+      <div class="section">{app_name}</div>
+      <div class="small">Outdoor Media Operations System</div>
+    </div>
+  </div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+    <span class="pill primary">🧩 Module: <b>{section}</b></span>
+    <span class="pill">👤 {user}</span>
+    <span class="pill accent">🔐 {role_label}</span>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    if logo_path and Path(logo_path).exists():
+        # Optional: show logo above the topbar for brand presence
+        st.image(logo_path, use_container_width=False, width=140)
+
+def grouped_menu(menu: list[str]):
+    """Group your existing `menu` list into sidebar sections (no logic changes)."""
+    groups = {
+        "Overview": [],
+        "Leads": [],
+        "Installation": [],
+        "Ads": [],
+        "System": [],
+    }
+    for item in menu:
+        k = re.sub(r"^[^A-Za-z0-9]+\s*", "", item).strip().lower()
+        if any(x in k for x in ["home", "dashboard", "report"]):
+            groups["Overview"].append(item)
+        elif any(x in k for x in ["lead", "pipeline"]):
+            groups["Leads"].append(item)
+        elif any(x in k for x in ["inventory", "screen", "document", "survey", "workorder", "installation"]):
+            groups["Installation"].append(item)
+        elif any(x in k for x in ["agreement", "campaign", "payment", "client", "advert"]):
+            groups["Ads"].append(item)
+        else:
+            groups["System"].append(item)
+    return [(g, items) for g, items in groups.items() if items]
+
+def sidebar_nav(menu: list[str], default_page: str | None = None) -> str:
+    """Sidebar navigation with grouping + hover feel (buttons). Returns selected PAGE."""
+    if not menu:
+        return ""
+    if "nav_page" not in st.session_state:
+        st.session_state["nav_page"] = default_page or menu[0]
+
+    selected = st.session_state["nav_page"]
+
+    st.markdown("### 📍 Navigation")
+    for group, items in grouped_menu(menu):
+        st.markdown(f"<div class='nav-group'>{group}</div>", unsafe_allow_html=True)
+        for it in items:
+            # Use Streamlit buttons for reliable rerun + state
+            if st.button(it, key=f"nav_{it}", use_container_width=True):
+                st.session_state["nav_page"] = it
+                st.rerun()
+
+    return st.session_state["nav_page"]
+
+# ---- Empty states & micro-interactions (Lottie) ----
+ILLUSTRATIONS = {
+    "success_lottie": "https://assets10.lottiefiles.com/packages/lf20_jbrw3hcz.json",
+    "error_lottie": "https://assets10.lottiefiles.com/packages/lf20_qp1q7mct.json",
+}
+
+def lottie(url: str, height: int = 160):
+    components.html(
+        f"""
+<script src="https://unpkg.com/@lottiefiles/lottie-player@latest/dist/lottie-player.js"></script>
+<lottie-player src="{url}" background="transparent" speed="1" style="width:100%;height:{height}px;" loop autoplay></lottie-player>
+""",
+        height=height,
+    )
+
+def empty_state(title: str, body: str, kind: str = "info"):
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        if kind == "success":
+            lottie(ILLUSTRATIONS["success_lottie"], height=150)
+        elif kind == "error":
+            lottie(ILLUSTRATIONS["error_lottie"], height=150)
+        else:
+            st.markdown("### 🟦")
+    with c2:
+        st.markdown(f"### {title}")
+        st.caption(body)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ---- Pro table renderer (search + pagination + badges) ----
+def _format_inr(x):
+    try:
+        v = float(x)
+        return f"₹ {v:,.0f}"
+    except Exception:
+        return str(x)
+
+def render_table_pro(
+    df: pd.DataFrame,
+    *,
+    title: str = "",
+    search_placeholder: str = "Search in table…",
+    hide_cols: list[str] | None = None,
+    date_cols: list[str] | None = None,
+    currency_cols: list[str] | None = None,
+    status_col: str | None = None,
+    page_size_default: int = 50,
+):
+    if df is None or len(df) == 0:
+        empty_state("No data", "No records found. Try changing filters or add new records.", kind="info")
+        return
+
+    dfx = df.copy()
+    hide_cols = hide_cols or []
+    date_cols = date_cols or []
+    currency_cols = currency_cols or []
+
+    q = st.text_input(
+        "",
+        placeholder=search_placeholder,
+        key=f"tbl_search_{title}_{hash(tuple(dfx.columns))}",
+    ).strip().lower()
+
+    if q:
+        mask = pd.Series(False, index=dfx.index)
+        for c in dfx.columns:
+            try:
+                mask = mask | dfx[c].astype(str).str.lower().str.contains(q, na=False)
+            except Exception:
+                pass
+        dfx = dfx[mask]
+
+    if status_col and status_col in dfx.columns:
+        def badge(v):
+            s = str(v or "").lower()
+            if s in ["paid", "active", "installed", "done", "approved", "completed"]:
+                cls = "badge-ok"
+            elif s in ["pending", "due", "scheduled", "in progress"]:
+                cls = "badge-warn"
+            elif s in ["rejected", "cancelled", "inactive", "overdue", "error"]:
+                cls = "badge-danger"
+            else:
+                cls = "badge"
+            return f"<span class='badge {cls}'>{str(v or '')}</span>"
+        dfx[status_col] = dfx[status_col].map(badge)
+
+    for c in date_cols:
+        if c in dfx.columns:
+            try:
+                dfx[c] = pd.to_datetime(dfx[c], errors="coerce").dt.strftime("%d-%b-%Y")
+            except Exception:
+                pass
+
+    for c in currency_cols:
+        if c in dfx.columns:
+            dfx[c] = dfx[c].map(_format_inr)
+
+    show_cols = [c for c in dfx.columns if c not in set(hide_cols)]
+    dfx = dfx[show_cols]
+
+    c1, c2, c3 = st.columns([2, 2, 3])
+    with c1:
+        page_size = st.selectbox("Rows", [25, 50, 100, 200, 500],
+                                 index=[25, 50, 100, 200, 500].index(page_size_default) if page_size_default in [25, 50, 100, 200, 500] else 1)
+    total_pages = max(1, math.ceil(len(dfx) / page_size))
+    with c2:
+        page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
+    with c3:
+        st.markdown(f"<span class='badge badge-strong'>Showing {len(dfx):,} rows</span>", unsafe_allow_html=True)
+
+    start = (page - 1) * page_size
+    view = dfx.iloc[start:start + page_size].copy()
+
+    if title:
+        st.markdown(f"**{title}**")
+
+    st.markdown(view.to_html(index=False, escape=False), unsafe_allow_html=True)
+
+def action_bar(left_buttons: list[tuple[str, str]], right_buttons: list[tuple[str, str]]):
+    """Secondary actions left, primary CTAs right."""
+    clicked = {}
+    st.markdown("<div class='card-tight'>", unsafe_allow_html=True)
+    c1, c2 = st.columns([2, 2])
+    with c1:
+        for label, key in left_buttons:
+            clicked[key] = st.button(label, key=key, use_container_width=True)
+    with c2:
+        for label, key in right_buttons:
+            clicked[key] = st.button(label, key=key, type="primary", use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+    return clicked
 
 
 def kpi(label, value):
@@ -2184,10 +4421,14 @@ with st.sidebar:
     )
     st.markdown("---")
 
-    PAGE = st.selectbox("Page", menu)
+    PAGE = sidebar_nav(menu, default_page=menu[0] if menu else "")
 
 # Normalize to internal page keys (strip emoji/prefix)
 PAGE_KEY = re.sub(r"^[^A-Za-z0-9]+\s*", "", PAGE).strip()
+
+# ---- Top brand header (UI-only) ----
+render_topbar(APP_TITLE, SECTION, USER, ROLE_LABEL.get(ROLE, str(ROLE)), LOGO_PATH)
+
 
 # Selected lead/property hash for Lead 360 panels (Interactions/Tasks/History)
 if "active_pid" not in st.session_state:
