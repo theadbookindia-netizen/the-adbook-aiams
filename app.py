@@ -1852,7 +1852,71 @@ def list_lead_updates(section: str) -> pd.DataFrame:
 # Lead updates (cached)
 upd = list_lead_updates(SECTION)
 leads_df = leads_df.merge(upd, left_on="__hash", right_on="record_hash", how="left")
+# ---------------------------------------------------------
+# SAFETY FIX: Make sure __hash exists before merge
+# ---------------------------------------------------------
 
+# Ensure leads_df has __hash column
+if "__hash" not in leads_df.columns:
+
+    # If record_hash already exists, reuse it
+    if "record_hash" in leads_df.columns:
+        leads_df["__hash"] = leads_df["record_hash"].astype("string").fillna("").str.strip()
+
+    else:
+        # Create stable hash from available columns
+        import hashlib
+
+        candidate_cols = [
+            "Property Name",
+            "Property Address",
+            "City",
+            "District",
+            "Promoter / Developer Name",
+            "Developer",
+            "Owner",
+            "Contact",
+            "Phone"
+        ]
+
+        use_cols = [c for c in candidate_cols if c in leads_df.columns]
+
+        if not use_cols:
+            # Fallback: use row number
+            leads_df["__hash"] = leads_df.index.astype("string").apply(
+                lambda x: hashlib.sha1(str(x).encode("utf-8")).hexdigest()
+            )
+
+        else:
+            leads_df["__hash"] = (
+                leads_df[use_cols]
+                .fillna("")
+                .astype("string")
+                .agg("|".join, axis=1)
+                .apply(lambda s: hashlib.sha1(s.encode("utf-8", errors="ignore")).hexdigest())
+            )
+
+# Ensure upd has record_hash
+if upd is None or len(upd) == 0:
+    upd = pd.DataFrame(
+        columns=[
+            "record_hash",
+            "section",
+            "status",
+            "assigned_to",
+            "lead_source",
+            "notes",
+            "follow_up",
+        ]
+    )
+
+if "record_hash" not in upd.columns:
+
+    if "__hash" in upd.columns:
+        upd["record_hash"] = upd["__hash"].astype("string")
+
+    else:
+        upd["record_hash"] = ""
 for c, default in [("status", "New"), ("assigned_to", ""), ("lead_source", "Cold Call"), ("notes", ""), ("follow_up", "")]:
     leads_df[c] = leads_df[c].fillna(default)
 
