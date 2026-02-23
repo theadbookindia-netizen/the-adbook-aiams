@@ -2230,12 +2230,23 @@ def page_admin_panel():
 
         with st.form("edit_user_form"):
 
-            new_role = st.selectbox(
-                "Role",
-                list(ROLE_LABEL.keys()),
-                index=list(ROLE_LABEL.keys()).index(user_row["role"]),
-                format_func=lambda x: ROLE_LABEL.get(x, x),
-            )
+           roles_list = list(ROLE_LABEL.keys())
+
+        # Canonicalize stored role (handles old/legacy role names)
+        stored_role = canonical_role(user_row.get("role", ""), user_row.get("section_scope"))
+
+        # Safe index (prevents ValueError)
+        try:
+            role_index = roles_list.index(stored_role)
+        except ValueError:
+            role_index = 0  # fallback (or set to roles_list.index(ROLE_SUPER_ADMIN) if you want)
+
+        new_role = st.selectbox(
+            "Role",
+            roles_list,
+            index=role_index,
+            format_func=lambda x: ROLE_LABEL.get(x, x),
+        )
 
             new_scope = role_default_scope(new_role)
             st.text_input("Module Scope (Auto)", value=new_scope, disabled=True)
