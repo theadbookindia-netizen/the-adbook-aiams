@@ -1984,7 +1984,20 @@ PAGE_KEY = re.sub(r"^[^A-Za-z0-9]+\s*", "", PAGE).strip()
 if "active_pid" not in st.session_state:
     st.session_state["active_pid"] = ""
 
+# NEW: active property selection (inventory_sites.property_id)
+if "active_property_id" not in st.session_state:
+    st.session_state["active_property_id"] = ""
+
+# Backward-safe sync (do NOT remove active_pid usage elsewhere)
+# If one is set and the other is empty, copy across.
+if (st.session_state.get("active_property_id") and not st.session_state.get("active_pid")):
+    st.session_state["active_pid"] = st.session_state["active_property_id"]
+if (st.session_state.get("active_pid") and not st.session_state.get("active_property_id")):
+    st.session_state["active_property_id"] = st.session_state["active_pid"]
+
 pid = st.session_state["active_pid"]
+active_property_id = str(st.session_state.get("active_property_id") or "").strip()
+
 # =========================================================
 # LEADS FILE READER (required by router)
 # Paste ABOVE the first call: read_leads_file(upload)
@@ -3013,6 +3026,17 @@ def safe_df_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
         if c not in out.columns:
             out[c] = ""
     return out
+
+
+def safe_first_row_dict(df: pd.DataFrame) -> dict:
+    """Return first row as dict, or {} if df is empty (prevents IndexError)."""
+    try:
+        if df is None or len(df) == 0:
+            return {}
+        return df.head(1).iloc[0].to_dict()
+    except Exception:
+        return {}
+
 
 
 
@@ -4257,6 +4281,17 @@ def safe_df_cols(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     return out
 
 
+def safe_first_row_dict(df: pd.DataFrame) -> dict:
+    """Return first row as dict, or {} if df is empty (prevents IndexError)."""
+    try:
+        if df is None or len(df) == 0:
+            return {}
+        return df.head(1).iloc[0].to_dict()
+    except Exception:
+        return {}
+
+
+
 # =========================================================
 # PAGES
 # =========================================================
@@ -4549,7 +4584,8 @@ elif PAGE_KEY == "Leads Pipeline":
     pid = rev.get(sel, "")
     pid = str(pid) if pid else ""
     st.session_state["active_pid"] = pid
-       m = df[df["__hash"].astype("string") == pid]
+
+    m = df[df["__hash"].astype("string") == pid]
     if m.empty:
         st.warning("Active property not found in this Lead list (pid is property_id, not lead __hash). Select from Lead list or set active from Map/Inventory.")
         st.stop()
@@ -4706,16 +4742,30 @@ elif PAGE_KEY == "Inventory (Sites)":
             st.info("No add/edit permission.")
         else:
             # pick existing
-            options = ["(New)"] + inv["property_id"].fillna("").astype(str).tolist()
-            pick = st.selectbox("Select property_id to edit", options)
+            # pick existing (readable label, still stores real property_id)
+            inv2 = inv.copy()
+            inv2["property_id"] = inv2["property_id"].fillna("").astype(str)
+            inv2["__label"] = (
+                inv2.get("property_code", "").fillna("").astype(str)
+                + " | " + inv2.get("property_name", "").fillna("").astype(str)
+                + " | " + inv2.get("city", "").fillna("").astype(str)
+            ).str.strip(" |")
+
+            label_list = ["(New)"] + inv2["__label"].tolist()
+            label_to_pid = dict(zip(inv2["__label"], inv2["property_id"]))
+
+            pick_label = st.selectbox("Select site to edit", label_list)
             row = {}
-            if pick != "(New)" and len(inv):
-                row = inv[inv["property_id"].astype(str) == pick].iloc[0].to_dict()
+            if pick_label != "(New)" and len(inv2):
+                pick_pid = str(label_to_pid.get(pick_label, "")).strip()
+                tmp = inv2[inv2["property_id"] == pick_pid]
+                row = safe_first_row_dict(tmp)
+
 
             with st.form("inv_form"):
                 c1,c2,c3 = st.columns(3)
                 with c1:
-                    property_id = st.text_input("property_id", value=row.get("property_id","") or str(uuid.uuid4()) if pick=="(New)" else str(row.get("property_id","")))
+                    property_id = st.text_input("property_id", value=row.get("property_id","") or str(uuid.uuid4()) if pick_label=="(New)" else str(row.get("property_id","")))
                     property_code = st.text_input("property_code", value=row.get("property_code","") or "")
                     district = st.text_input("district", value=row.get("district","") or "")
                     city = st.text_input("city", value=row.get("city","") or "")
@@ -4972,7 +5022,7 @@ elif PAGE_KEY == "Ad Sales Inventory":
                 with c1:
                     ad_id = st.text_input(
                         "ad_id",
-                        value=row.get("ad_id","") or (str(uuid.uuid4()) if pick=="(New)" else str(row.get("ad_id",""))),
+                        value=row.get("ad_id","") or (str(uuid.uuid4()) if pick_label=="(New)" else str(row.get("ad_id",""))),
                     )
                     property_id = st.selectbox("property_id", [""] + pid_list, index=0)
                     screen_id = st.text_input("screen_id", value=row.get("screen_id","") or "")
@@ -5061,7 +5111,7 @@ elif PAGE_KEY == "Agreements":
             with st.form("ag_form"):
                 c1,c2,c3 = st.columns(3)
                 with c1:
-                    agreement_id = st.text_input("agreement_id", value=row.get("agreement_id","") or str(uuid.uuid4()) if pick=="(New)" else str(row.get("agreement_id","")))
+                    agreement_id = st.text_input("agreement_id", value=row.get("agreement_id","") or str(uuid.uuid4()) if pick_label=="(New)" else str(row.get("agreement_id","")))
                     property_id = st.selectbox("property_id", [""] + pid_list, index=0)
                     property_code = st.text_input("property_code", value=row.get("property_code","") or "")
                     party_name = st.text_input("party_name", value=row.get("party_name","") or "")
@@ -5265,17 +5315,96 @@ elif PAGE_KEY == "Documents Vault":
                     st.rerun()
 
 elif PAGE_KEY == "Map View":
-    page_title("🗺 Map View", "View sites on map (requires latitude/longitude).")
+    page_title("🗺 Map View", "Filter sites, set Active Property, open Google Maps.")
 
     if not can(SECTION, "view", ROLE):
         st.error("You don't have permission to view this section.")
         st.stop()
 
-    inv = qdf("SELECT property_name, city, district, latitude, longitude FROM inventory_sites WHERE latitude IS NOT NULL AND longitude IS NOT NULL LIMIT 5000")
+    inv = qdf(
+        """
+        SELECT
+          property_id,
+          COALESCE(property_code,'') AS property_code,
+          COALESCE(property_name,'') AS property_name,
+          COALESCE(city,'') AS city,
+          COALESCE(district,'') AS district,
+          latitude,
+          longitude
+        FROM inventory_sites
+        WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+        ORDER BY property_name
+        LIMIT 5000
+        """
+    )
+
     if len(inv) == 0:
         st.info("No sites with coordinates yet. Fill latitude/longitude in Inventory.")
-    else:
-        st.map(inv.rename(columns={"latitude":"lat","longitude":"lon"}), zoom=10)
+        st.stop()
+
+    # -------- Filters --------
+    c1, c2, c3 = st.columns([1, 1, 1.2])
+    with c1:
+        dist_opts = ["(All)"] + sorted([x for x in inv["district"].dropna().astype(str).unique().tolist() if x.strip()])
+        sel_dist = st.selectbox("District", dist_opts, index=0)
+    with c2:
+        tmp = inv if sel_dist == "(All)" else inv[inv["district"].astype(str) == sel_dist]
+        city_opts = ["(All)"] + sorted([x for x in tmp["city"].dropna().astype(str).unique().tolist() if x.strip()])
+        sel_city = st.selectbox("City", city_opts, index=0)
+    with c3:
+        q = st.text_input("Search (code / name)", placeholder="Type…")
+
+    df = inv.copy()
+    if sel_dist != "(All)":
+        df = df[df["district"].astype(str) == sel_dist]
+    if sel_city != "(All)":
+        df = df[df["city"].astype(str) == sel_city]
+    if q.strip():
+        s = q.strip().lower()
+        df = df[
+            df["property_code"].astype(str).str.lower().str.contains(s, na=False)
+            | df["property_name"].astype(str).str.lower().str.contains(s, na=False)
+        ]
+
+    st.markdown(f"<span class='badge badge-strong'>Map sites: {len(df):,}</span>", unsafe_allow_html=True)
+
+    # -------- Map --------
+    st.map(df.rename(columns={"latitude": "lat", "longitude": "lon"}), zoom=10)
+
+    # -------- Pick site + Set Active --------
+    df["property_id"] = df["property_id"].fillna("").astype(str)
+    df["__label"] = (
+        df["property_code"].fillna("").astype(str)
+        + " | " + df["property_name"].fillna("").astype(str)
+        + " | " + df["city"].fillna("").astype(str)
+    ).str.strip(" |")
+
+    label_list = ["(Select)"] + df["__label"].tolist()
+    label_to_pid = dict(zip(df["__label"], df["property_id"]))
+
+    left, right = st.columns([3, 1])
+    with left:
+        pick_label = st.selectbox("Pick a site (for details / Property 360)", label_list, index=0)
+    with right:
+        if st.button("Set as Active", type="primary", disabled=(pick_label == "(Select)")):
+            picked_pid = str(label_to_pid.get(pick_label, "")).strip()
+            st.session_state["active_property_id"] = picked_pid
+            # backward-safe
+            st.session_state["active_pid"] = picked_pid
+            st.success("Active property selected.")
+            st.rerun()
+
+    if pick_label != "(Select)":
+        pid2 = str(label_to_pid.get(pick_label, "")).strip()
+        site = get_inventory_site(pid2)
+        if site:
+            st.markdown(
+                f"**{site.get('property_code','')} | {site.get('property_name','')} | {site.get('city','')}**  \n"
+                f"{site.get('property_address','')}"
+            )
+            gm = google_maps_url(str(site.get("property_name","")), str(site.get("property_address","")))
+            st.markdown(f"[📍 Open in Google Maps]({gm})")
+            st.info("Next: open **Property 360 (Install)** to manage Survey → Workorder → Milestones.")
 
 
 elif PAGE_KEY == "Property 360 (Install)":
@@ -5286,7 +5415,7 @@ elif PAGE_KEY == "Property 360 (Install)":
 
     page_title("🧩 Property 360 (Install)", "Survey → Workorder → Milestones for one property.")
 
-    pid = str(st.session_state.get("active_pid") or "").strip()
+    pid = str(st.session_state.get("active_property_id") or st.session_state.get("active_pid") or "").strip()
 
     # Let user pick a property if none selected
     inv = qdf("""
@@ -5319,10 +5448,11 @@ elif PAGE_KEY == "Property 360 (Install)":
     with cB:
         if st.button("Use Selected", type="primary"):
             if pick_label != "(Select)":
-                st.session_state["active_pid"] = str(label_to_pid.get(pick_label, "")).strip()
+                st.session_state["active_property_id"] = str(label_to_pid.get(pick_label, "")).strip()
+                st.session_state["active_pid"] = st.session_state["active_property_id"]
                 st.rerun()
 
-    pid = str(st.session_state.get("active_pid") or "").strip()
+    pid = str(st.session_state.get("active_property_id") or st.session_state.get("active_pid") or "").strip()
     if not pid:
         st.info("Select a property from Map View (Set as Active) OR choose from the dropdown above.")
         st.stop()
