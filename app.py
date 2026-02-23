@@ -15,6 +15,7 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import NullPool
+import pydeck as pdk
 
 # ---- PDF (Cloud-safe) ----
 from reportlab.lib.pagesizes import A4
@@ -361,6 +362,64 @@ def column_exists(table_name: str, column_name: str) -> bool:
         {"t": table_name, "c": column_name},
     )
     return bool(df.iloc[0]["ex"])
+# =========================================================
+# MAP HELPERS (Module-1 Step B2)
+# =========================================================
+
+def _pick_cols(table: str, candidates: list[str]) -> list[str]:
+    """Return only columns that exist in DB table (avoids SQL errors)."""
+    out = []
+    for c in candidates:
+        try:
+            if column_exists(table, c):
+                out.append(c)
+        except Exception:
+            # if anything goes wrong, skip column
+            continue
+    return out
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def map_inventory_df(limit: int = 5000) -> pd.DataFrame:
+    """
+    Pull inventory_sites rows that have coordinates.
+    This function auto-selects optional columns only if they exist,
+    so it won't break your app.
+    """
+    base_cols = ["property_id", "property_name", "city", "district", "latitude", "longitude"]
+
+    optional_cols = _pick_cols(
+        "inventory_sites",
+        [
+            "property_code",
+            "site_rating",
+            "no_screens_installed",
+            "contact_person",
+            "contact_details",
+            "agreed_rent_pm",
+            "notes",
+            "last_updated",
+        ],
+    )
+
+    cols = base_cols + [c for c in optional_cols if c not in base_cols]
+
+    sql = f"""
+        SELECT {", ".join(cols)}
+        FROM inventory_sites
+        WHERE latitude IS NOT NULL
+          AND longitude IS NOT NULL
+        ORDER BY {("last_updated" if "last_updated" in cols else "property_name")} DESC
+        LIMIT {int(limit)}
+    """
+    return qdf(sql)
+
+
+def _str_contains(series: pd.Series, q: str) -> pd.Series:
+    q = (q or "").strip().lower()
+    if not q:
+        return pd.Series([True] * len(series), index=series.index)
+    return series.fillna("").astype(str).str.lower().str.contains(q, na=False)
 # =========================================================
 # DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL
 # =========================================================
