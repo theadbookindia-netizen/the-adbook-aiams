@@ -4159,10 +4159,17 @@ def render_table_pro(
     date_cols = date_cols or []
     currency_cols = currency_cols or []
 
+    # Stable per-table key to avoid StreamlitDuplicateElementId
+    _cols_sig = '|'.join([str(c) for c in dfx.columns])
+    _sig = hashlib.md5((title + '|' + _cols_sig).encode('utf-8')).hexdigest()[:10]
+    _k_search = f"tbl_search_{_sig}"
+    _k_rows = f"tbl_rows_{_sig}"
+    _k_page = f"tbl_page_{_sig}"
+
     q = st.text_input(
         "",
         placeholder=search_placeholder,
-        key=f"tbl_search_{title}_{hash(tuple(dfx.columns))}",
+        key=_k_search,
     ).strip().lower()
 
     if q:
@@ -4204,11 +4211,11 @@ def render_table_pro(
 
     c1, c2, c3 = st.columns([2, 2, 3])
     with c1:
-        page_size = st.selectbox("Rows", [25, 50, 100, 200, 500],
+        page_size = st.selectbox("Rows", [25, 50, 100, 200, 500], key=_k_rows,
                                  index=[25, 50, 100, 200, 500].index(page_size_default) if page_size_default in [25, 50, 100, 200, 500] else 1)
     total_pages = max(1, math.ceil(len(dfx) / page_size))
     with c2:
-        page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
+        page = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1, key=_k_page)
     with c3:
         st.markdown(f"<span class='badge badge-strong'>Showing {len(dfx):,} rows</span>", unsafe_allow_html=True)
 
