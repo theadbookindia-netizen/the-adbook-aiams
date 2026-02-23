@@ -1574,6 +1574,202 @@ def read_leads_file(upload=None):
         df = prepare_leads_df(df)
 
     return df, version_key
+
+# =========================================================
+# ACCESS CONTROL (must be defined BEFORE sidebar uses it)
+# =========================================================
+def require_module_access(section: str):
+    """
+    Blocks access if user tries to open a module outside their scope.
+    Uses existing globals: SCOPE, SCOPE_BOTH, SECTION_INSTALL, SECTION_ADS
+    """
+    try:
+        if SCOPE == SCOPE_BOTH:
+            return
+        if section != SCOPE:
+            st.error("Access Denied")
+            st.stop()
+    except Exception:
+        # safest fallback: block nothing rather than crashing
+        return
+
+
+# =========================================================
+# PROPERTY CODES (must be defined BEFORE ensure_property_codes() is called)
+# =========================================================
+@st.cache_data(show_spinner=False, ttl=120)
+def get_property_codes_df() -> pd.DataFrame:
+    # If table doesn't exist yet, this will error; keep it explicit (migration should create it).
+    return qdf(
+        "SELECT property_id, property_code, district, city, property_name FROM property_codes"
+    )
+
+
+def ensure_property_codes(leads_df: pd.DataFrame, batch_size: int = 700) -> pd.DataFrame:
+    """
+    Ensure every lead/property has a unique property_code in public.property_codes.
+
+    - Base code: <2 letters district><2 letters city><3 digits> (e.g., DICI001)
+    - If base code taken, suffix letters: DICI001A, DICI001B, ... DICI001AA, etc.
+    """
+    # ---- Helpers ----
+    def _letters_n(x: str, n: int) -> str:
+        s = re.sub(r"[^A-Za-z]+", "", str(x or "")).upper()
+        return (s + ("X" * n))[:n]
+
+    def _make_prefix4(district: str, city: str, pname: str) -> str:
+        pref = (_letters_n(district, 2) + _letters_n(city, 2)).upper()
+        if pref == "XXXX":
+            pref = _letters_n(pname, 4)
+        if not pref or pref == "XXXX":
+            pref = "PROP"
+        return pref[:4]
+
+    def _suffixes():
+        A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        for a in A:
+            yield a
+        for a in A:
+            for b in A:
+                yield a + b
+        for a in A:
+            for b in A:
+                for c in A:
+                    yield a + b + c
+
+    # ---- Defensive normalization ----
+    df = leads_df.copy()
+    for c in ["District", "City", "Property Name", "__hash"]:
+        if c not in df.columns:
+            df[c] = ""
+    df["__hash"] = df["__hash"].fillna("").astype(str).str.strip()
+
+    # Only rows with a usable property_id (= your __hash)
+    df = df[df["__hash"] != ""]
+    if df.empty:
+        # return empty but correctly shaped
+        return pd.DataFrame(columns=["property_id", "property_code", "district", "city", "property_name"])
+
+    # Existing codes
+    try:
+        existing = get_property_codes_df()
+    except Exception:
+        # If table missing, fail with readable message (migration must run first)
+        st.error("Missing DB table: property_codes. Run DB migration first.")
+        st.stop()
+
+    existing = existing.copy() if existing is not None else pd.DataFrame()
+    if existing.empty:
+        existing = pd.DataFrame(columns=["property_id", "property_code", "district", "city", "property_name"])
+
+    existing["property_id"] = existing["property_id"].astype("string")
+    existing["property_code"] = existing["property_code"].astype("string")
+
+    existing_ids = set(existing["property_id"].dropna().astype(str).tolist())
+    used_codes = set(existing["property_code"].dropna().astype(str).tolist())
+
+    # Missing ids we must insert
+    need = df[~df["__hash"].astype(str).isin(existing_ids)][["__hash", "District", "City", "Property Name"]].copy()
+    if need.empty:
+        return existing
+
+    # Generate base codes with sequence per prefix
+    need["__prefix"] = need.apply(
+        lambda r: _make_prefix4(r.get("District", ""), r.get("City", ""), r.get("Property Name", "")),
+        axis=1,
+    )
+
+    # Build next number per prefix from already used codes
+    # Parse existing codes: PREFIX + 3 digits + optional suffix
+    # Example: DICI001, DICI001A
+    prefix_max = {}
+    for code in used_codes:
+        m = re.match(r"^([A-Z]{4})(\d{3})", str(code))
+        if not m:
+            continue
+        pfx, num = m.group(1), int(m.group(2))
+        prefix_max[pfx] = max(prefix_max.get(pfx, 0), num)
+
+    # Now create rows, inserting one-by-one to be crash-proof
+    inserts = []
+    for _, r in need.iterrows():
+        pid = str(r["__hash"])
+        pfx = str(r["__prefix"])
+        next_num = prefix_max.get(pfx, 0) + 1
+        prefix_max[pfx] = next_num
+
+        base = f"{pfx}{next_num:03d}"
+        code = base
+
+        if code in used_codes:
+            for suf in _suffixes():
+                trial = base + suf
+                if trial not in used_codes:
+                    code = trial
+                    break
+
+        used_codes.add(code)
+
+        inserts.append(
+            {
+                "property_id": pid,
+                "property_code": code,
+                "district": str(r.get("District", "") or ""),
+                "city": str(r.get("City", "") or ""),
+                "property_name": str(r.get("Property Name", "") or ""),
+            }
+        )
+
+    # Insert rows safely (one-by-one)
+    for row in inserts:
+        try:
+            exec_sql(
+                """
+                INSERT INTO property_codes(property_id, property_code, district, city, property_name)
+                VALUES(:pid, :pc, :d, :c, :pn)
+                ON CONFLICT (property_id) DO NOTHING
+                """,
+                {"pid": row["property_id"], "pc": row["property_code"], "d": row["district"], "c": row["city"], "pn": row["property_name"]},
+            )
+        except Exception:
+            # don’t crash the entire app for one bad insert
+            continue
+
+    # Return fresh combined view
+    return get_property_codes_df()
+
+
+def property_display_map(codes_df: pd.DataFrame, leads_df: pd.DataFrame) -> dict:
+    """
+    Creates mapping: property_id -> 'PROPERTY_CODE | Property Name | City'
+    Used for dropdown display.
+    """
+    if codes_df is None or len(codes_df) == 0:
+        return {}
+    df = codes_df.copy()
+    df["property_id"] = df["property_id"].astype("string")
+    df["property_code"] = df["property_code"].astype("string")
+
+    # Pull name/city from leads_df when possible (more current)
+    name_map = {}
+    city_map = {}
+    if leads_df is not None and len(leads_df) and "__hash" in leads_df.columns:
+        tmp = leads_df.copy()
+        tmp["__hash"] = tmp["__hash"].astype("string")
+        if "Property Name" in tmp.columns:
+            name_map = dict(zip(tmp["__hash"], tmp["Property Name"].fillna("").astype(str)))
+        if "City" in tmp.columns:
+            city_map = dict(zip(tmp["__hash"], tmp["City"].fillna("").astype(str)))
+
+    out = {}
+    for _, r in df.iterrows():
+        pid = str(r["property_id"] or "")
+        code = str(r["property_code"] or "")
+        pname = name_map.get(pid, str(r.get("property_name", "") or ""))
+        city = city_map.get(pid, str(r.get("city", "") or ""))
+        out[pid] = f"{code} | {pname} | {city}".strip(" |")
+    return out
+    
 # =========================================================
 # LOAD LEADS (CACHED PREP) + CODES ONLY WHEN FILE CHANGES
 # =========================================================
