@@ -4220,6 +4220,21 @@ def render_table_pro(
 
     st.markdown(view.to_html(index=False, escape=False), unsafe_allow_html=True)
 
+
+
+def infer_internal_cols(df: pd.DataFrame) -> list[str]:
+    """Heuristic: hide internal ids/hashes/audit keys from user tables."""
+    cols=[]
+    for c in df.columns:
+        cl=str(c).strip().lower()
+        if cl.startswith("__") or "hash" in cl:
+            cols.append(c)
+        elif cl.endswith("_id") or cl in ["id", "pk", "uuid"]:
+            cols.append(c)
+        elif cl in ["created_at", "updated_at"] and c not in ["created_at", "updated_at"]:
+            # keep normal timestamps if user wants; heuristic doesn't hide
+            pass
+    return cols
 def action_bar(left_buttons: list[tuple[str, str]], right_buttons: list[tuple[str, str]]):
     """Secondary actions left, primary CTAs right."""
     clicked = {}
@@ -4860,7 +4875,7 @@ def page_home():
             return
         for title, df in res.items():
             st.markdown(f"### {title}")
-            st.dataframe(df, use_container_width=True)
+            render_table_pro(df, title=title, hide_cols=infer_internal_cols(df), page_size_default=25)
     else:
         st.info("Use the Global Search (left) to search across modules.")
 
@@ -5005,7 +5020,7 @@ def page_leads_pipeline():
             if c not in df_page.columns:
                 df_page[c] = ""
 
-        st.dataframe(df_page[show_cols], use_container_width=True, height=520)
+        render_table_pro(df_page[show_cols], hide_cols=infer_internal_cols(df_page[show_cols]), date_cols=['follow_up','last_updated','installed_date','last_service_date','next_service_due','issue_date','expiry_date','uploaded_at'], currency_cols=['agreed_rent_pm'], status_col='status', page_size_default=50)
 
     st.divider()
     st.markdown("### Update a lead")
@@ -5230,7 +5245,7 @@ def page_inventory_sites():
         for c in show_cols:
             if c not in df_page.columns:
                 df_page[c] = ""
-        st.dataframe(df_page[show_cols], use_container_width=True, height=560)
+        render_table_pro(df_page[show_cols], hide_cols=infer_internal_cols(df_page[show_cols]), date_cols=['follow_up','last_updated','installed_date','last_service_date','next_service_due','issue_date','expiry_date','uploaded_at'], currency_cols=['agreed_rent_pm'], status_col='status', page_size_default=50)
 
 def page_screens():
     page_title("Screens", "Installed screens + service info")
@@ -5241,7 +5256,7 @@ def page_screens():
                LEFT JOIN inventory_sites i ON i.property_id = s.property_id
                ORDER BY s.last_updated DESC
                LIMIT 500""")
-    st.dataframe(df, use_container_width=True)
+    render_table_pro(df, title='Sites', hide_cols=infer_internal_cols(df), date_cols=['last_updated'], currency_cols=['agreed_rent_pm'], page_size_default=50)
 
 def page_documents_vault():
     page_title("Documents Vault", "Upload and track docs (NOC, agreements, photos, etc.)")
@@ -5249,7 +5264,11 @@ def page_documents_vault():
                FROM documents_vault
                ORDER BY uploaded_at DESC
                LIMIT 500""")
-    st.dataframe(df, use_container_width=True)
+    # Map boolean to friendly label for badge rendering
+    if 'is_active' in df.columns:
+        df = df.copy()
+        df['is_active'] = df['is_active'].map(lambda x: 'Active' if bool(x) else 'Inactive')
+    render_table_pro(df, title='Screens', hide_cols=infer_internal_cols(df), date_cols=['installed_date','last_service_date','next_service_due','last_updated'], status_col='is_active', page_size_default=50)
 
 def page_map_view():
     page_title("Map View", "Map + filters + property popup (tooltip)")
@@ -5420,7 +5439,7 @@ def page_map_view():
     for c in show_cols:
         if c not in df.columns:
             df[c] = ""
-    st.dataframe(df[show_cols], use_container_width=True, height=320)
+    render_table_pro(df[show_cols], title='Map List', hide_cols=infer_internal_cols(df[show_cols]), date_cols=['last_updated'], currency_cols=['agreed_rent_pm'], status_col='status', page_size_default=25)
 
 def page_proposals():
     page_title("Proposals", "Generate and download system PDFs")
@@ -6642,7 +6661,7 @@ def page_home():
             return
         for title, df in res.items():
             st.markdown(f"### {title}")
-            st.dataframe(df, use_container_width=True)
+            render_table_pro(df, title=title, hide_cols=infer_internal_cols(df), page_size_default=25)
     else:
         st.info("Use the Global Search (left) to search across modules.")
 
@@ -6696,7 +6715,7 @@ def page_leads_pipeline():
         if c not in df.columns:
             df[c] = ""
 
-    st.dataframe(df[show_cols], use_container_width=True, height=520)
+    render_table_pro(df[show_cols], title='Leads', hide_cols=infer_internal_cols(df[show_cols]), date_cols=['follow_up','last_updated'], status_col='status', page_size_default=50)
 
     st.markdown("### Update a lead")
     pid_list = df["__hash"].astype("string").dropna().unique().tolist()
@@ -6736,7 +6755,7 @@ def page_inventory_sites():
                FROM inventory_sites
                ORDER BY last_updated DESC
                LIMIT 500""")
-    st.dataframe(df, use_container_width=True)
+    render_table_pro(df, title='Sites', hide_cols=infer_internal_cols(df), date_cols=['last_updated'], currency_cols=['agreed_rent_pm'], page_size_default=50)
 
 def page_screens():
     page_title("Screens", "Installed screens + service info")
@@ -6747,7 +6766,11 @@ def page_screens():
                LEFT JOIN inventory_sites i ON i.property_id = s.property_id
                ORDER BY s.last_updated DESC
                LIMIT 500""")
-    st.dataframe(df, use_container_width=True)
+    # Map boolean to friendly label for badge rendering
+    if 'is_active' in df.columns:
+        df = df.copy()
+        df['is_active'] = df['is_active'].map(lambda x: 'Active' if bool(x) else 'Inactive')
+    render_table_pro(df, title='Screens', hide_cols=infer_internal_cols(df), date_cols=['installed_date','last_service_date','next_service_due','last_updated'], status_col='is_active', page_size_default=50)
 
 def page_documents_vault():
     page_title("Documents Vault", "Upload and track docs (NOC, agreements, photos, etc.)")
@@ -6755,7 +6778,7 @@ def page_documents_vault():
                FROM documents_vault
                ORDER BY uploaded_at DESC
                LIMIT 500""")
-    st.dataframe(df, use_container_width=True)
+    render_table_pro(df, title='Documents', hide_cols=infer_internal_cols(df), date_cols=['issue_date','expiry_date','uploaded_at'], page_size_default=50)
 
 def page_map_view():
     page_title("Map View", "Open property location in Google Maps")
@@ -6938,7 +6961,7 @@ def page_admin_panel():
                     # for matrix display, treat assignee checks as not applicable
                     row[a1] = "✅" if can_action(sec, a1, r, username="__matrix__", entity_assigned_to="__matrix__", allow_assign=True) else "—"
                 rows.append(row)
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, height=420)
+        render_table_pro(pd.DataFrame(rows), title='Role Permissions', hide_cols=[], page_size_default=50)
 
 def render_page(page_key: str):
     # Normalize the same way your code does (PAGE_KEY already normalized)
@@ -7039,7 +7062,7 @@ if PAGE_KEY == "Home":
                 continue
             any_hit = True
             with st.expander(f"{mod} — {len(df)} results", expanded=False):
-                st.dataframe(df, use_container_width=True, height=280)
+                render_table_pro(df, title=mod, hide_cols=infer_internal_cols(df), page_size_default=25)
                 if can(SECTION, "export", ROLE):
                     st.download_button(
                         f"⬇ Export {mod} (CSV)",
@@ -7070,7 +7093,7 @@ if PAGE_KEY == "Home":
     view_cols = ["District", "City", "Property Name", "Promoter / Developer Name",
                  "Promoter Mobile Number", "Promoter Email", "status", "assigned_to", "follow_up"]
     dfv = safe_df_cols(df, view_cols).iloc[start:end]
-    st.dataframe(dfv, use_container_width=True, height=560)
+    render_table_pro(dfv, title='Leads (page view)', hide_cols=infer_internal_cols(dfv), date_cols=['follow_up'], status_col='status', page_size_default=50)
 
 elif PAGE_KEY == "Management Dashboard":
     page_title("📈 Management Dashboard", "Executive KPIs, coverage, funnel, and revenue snapshot.")
@@ -7109,7 +7132,7 @@ elif PAGE_KEY == "Management Dashboard":
         kpi("High-Value (flagged)", f"{hi:,}")
 
     st.markdown("### 🗺 District Coverage (Top 25 by properties)")
-    st.dataframe(dist, use_container_width=True, height=360)
+    render_table_pro(dist, title='District Coverage (Top 25)', hide_cols=[], page_size_default=25)
 
     st.markdown("### 📌 Funnel Snapshot")
     funnel = pd.DataFrame({
@@ -7123,7 +7146,7 @@ elif PAGE_KEY == "Management Dashboard":
             int((leads_df["status"]=="Rejected/Not Suitable").sum()),
         ]
     })
-    st.dataframe(funnel, use_container_width=True, height=260)
+    render_table_pro(funnel, title='Funnel Snapshot', hide_cols=[], page_size_default=25)
 
     st.markdown("### 💰 Revenue Snapshot (Agreements + Payments)")
     try:
@@ -7132,10 +7155,10 @@ elif PAGE_KEY == "Management Dashboard":
         c1, c2 = st.columns(2)
         with c1:
             st.caption("Agreements")
-            st.dataframe(agr, use_container_width=True, height=260)
+            render_table_pro(agr, title='Agreements', hide_cols=infer_internal_cols(agr), currency_cols=['rent_sum'], status_col='status', page_size_default=25)
         with c2:
             st.caption("Billing & Reminders")
-            st.dataframe(pay, use_container_width=True, height=260)
+            render_table_pro(pay, title='Billing & Reminders', hide_cols=infer_internal_cols(pay), currency_cols=['amount_sum'], status_col='status', page_size_default=25)
     except Exception as e:
         st.info("Revenue tables are available but some fields may be empty yet.")
 
@@ -7179,7 +7202,7 @@ elif PAGE_KEY == "Installation Opportunities":
     st.markdown(f"<span class='badge badge-strong'>Results: {len(df):,}</span>", unsafe_allow_html=True)
 
     view_cols = ["District","City","Property Name","Promoter / Developer Name","Promoter Mobile Number","Promoter Email","status","assigned_to","follow_up"]
-    st.dataframe(safe_df_cols(df, view_cols).head(800), height=560)
+    render_table_pro(safe_df_cols(df, view_cols).head(800), title='Installation Opportunities', hide_cols=infer_internal_cols(df), date_cols=['follow_up'], status_col='status', page_size_default=50)
 
 elif PAGE_KEY == "Ads Opportunities":
     page_title("💼 Ads Opportunities", "Find screens/sites to sell advertisements (availability + targeting).")
@@ -7202,7 +7225,7 @@ elif PAGE_KEY == "Ads Opportunities":
     sql = base + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY i.district, i.city LIMIT 2000"
     scr = qdf(sql, params)
     st.markdown(f"<span class='badge badge-strong'>Screens found: {len(scr):,}</span>", unsafe_allow_html=True)
-    st.dataframe(scr, use_container_width=True, height=520)
+    render_table_pro(scr, title='Screens found', hide_cols=infer_internal_cols(scr), date_cols=['installed_date','last_service_date','next_service_due','last_updated'], status_col='is_active', page_size_default=50)
 
     st.caption("Tip: Use Ad Sales Inventory page to create bookings and track clients/slots.")
 
@@ -7231,7 +7254,7 @@ elif PAGE_KEY == "Tasks & Alerts":
     tdf = qdf(sql, params)
 
     st.markdown(f"<span class='badge badge-strong'>Tasks: {len(tdf):,}</span>", unsafe_allow_html=True)
-    st.dataframe(tdf, use_container_width=True, height=520)
+    render_table_pro(tdf, title='Tasks', hide_cols=infer_internal_cols(tdf), date_cols=['due_date','created_at','updated_at'], status_col='status', page_size_default=50)
 
     st.markdown("### ➕ Quick Task Create")
     can_add_task = can(SECTION, "edit", ROLE)
@@ -7260,7 +7283,7 @@ elif PAGE_KEY == "Reports":
     # Performance by assignee
     perf = leads_df.groupby(["assigned_to","status"]).size().reset_index(name="count")
     st.markdown("### 👥 Executive Performance (Lead Status Counts)")
-    st.dataframe(perf.sort_values(["assigned_to","count"], ascending=[True,False]), height=420)
+    render_table_pro(perf.sort_values(['assigned_to','count'], ascending=[True,False]), title='Executive Performance', hide_cols=[], page_size_default=50)
 
     st.markdown("### 🗺 White-spot Districts (no Installed)")
     dist_status = leads_df.groupby(["District","status"]).size().reset_index(name="count")
@@ -7268,7 +7291,7 @@ elif PAGE_KEY == "Reports":
     totals = leads_df.groupby("District").size().reset_index(name="total")
     cov = totals.merge(installed_by_dist, on="District", how="left").fillna({"installed":0})
     white = cov[cov["installed"]==0].sort_values("total", ascending=False).head(50)
-    st.dataframe(white, use_container_width=True, height=360)
+    render_table_pro(white, title='White-spot Districts', hide_cols=[], page_size_default=50)
 
     st.markdown("### ⏱ Average Conversion Time (Contacted → Installed)")
     if table_exists("lead_status_history"):
@@ -7287,7 +7310,7 @@ elif PAGE_KEY == "Reports":
             if len(merged):
                 merged["days"] = (pd.to_datetime(merged["installed_at"]) - pd.to_datetime(merged["contacted_at"])).dt.days
                 st.write(f"Average days: **{merged['days'].mean():.1f}** (based on {len(merged)} conversions)")
-                st.dataframe(merged[["record_hash","contacted_at","installed_at","days"]].sort_values("days").head(100), height=320)
+                render_table_pro(merged[['record_hash','contacted_at','installed_at','days']].sort_values('days').head(100), title='Conversion Timing', hide_cols=['record_hash'], date_cols=['contacted_at','installed_at'], page_size_default=25)
             else:
                 st.info("No conversions found in status history yet.")
         except Exception:
@@ -7403,7 +7426,7 @@ elif PAGE_KEY == "Leads Pipeline":
                         "status","assigned_to","lead_source","follow_up","notes"
                     ]
                 cols = [c for c in cols if c in df_page.columns]
-                st.dataframe(df_page[cols], use_container_width=True, height=520)
+                render_table_pro(df_page[cols], title='Leads', hide_cols=infer_internal_cols(df_page[cols]), date_cols=['follow_up','last_updated'], status_col='status', page_size_default=50)
 
             # Open lead selector (works on mobile; avoids relying on row-click)
             labels = []
@@ -7501,7 +7524,7 @@ elif PAGE_KEY == "Leads Pipeline":
                         with st.spinner("Loading interactions…"):
                             ints = _lead360_interactions_cached(pid, SECTION)
                         st.markdown(f"<span class='badge badge-strong'>Interactions: {len(ints):,}</span>", unsafe_allow_html=True)
-                        st.dataframe(ints, use_container_width=True, height=260)
+                        render_table_pro(ints, title='Interactions', hide_cols=infer_internal_cols(ints), date_cols=['created_at'], page_size_default=25)
 
                         can_add_int = can(SECTION, "edit", ROLE)
                         with st.form("add_interaction"):
@@ -7536,7 +7559,7 @@ elif PAGE_KEY == "Leads Pipeline":
                         with st.spinner("Loading tasks…"):
                             tasks = _lead360_tasks_cached(pid, SECTION)
                         st.markdown(f"<span class='badge badge-strong'>Tasks: {len(tasks):,}</span>", unsafe_allow_html=True)
-                        st.dataframe(tasks, use_container_width=True, height=260)
+                        render_table_pro(tasks, title='Tasks', hide_cols=infer_internal_cols(tasks), date_cols=['due_date','created_at'], status_col='status', page_size_default=25)
 
                         can_add_task = can(SECTION, "edit", ROLE)
                         with st.form("add_task"):
@@ -7577,7 +7600,7 @@ elif PAGE_KEY == "Leads Pipeline":
                         with st.spinner("Loading history…"):
                             hist = _lead360_history_cached(pid, SECTION)
                         st.markdown(f"<span class='badge badge-strong'>Status changes: {len(hist):,}</span>", unsafe_allow_html=True)
-                        st.dataframe(hist, use_container_width=True, height=260)
+                        render_table_pro(hist, title='Status history', hide_cols=infer_internal_cols(hist), date_cols=['changed_at','created_at'], status_col='status', page_size_default=25)
 
 elif PAGE_KEY == "Inventory (Sites)":
     page_title("🗂 Inventory (Sites)", "Create / update installed sites. Fast search + CRUD.")
@@ -7599,7 +7622,7 @@ elif PAGE_KEY == "Inventory (Sites)":
 
     tabs = st.tabs(["📋 View", "➕ Add / Edit", "🔁 Recount Screens"])
     with tabs[0]:
-        st.dataframe(inv, use_container_width=True, height=520)
+        render_table_pro(inv, title='Sites', hide_cols=infer_internal_cols(inv), date_cols=['last_updated'], currency_cols=['agreed_rent_pm'], page_size_default=50)
         if len(inv) and can(SECTION, "export", ROLE):
             st.download_button("⬇ Export sites (CSV)", data=df_to_csv_bytes(inv), file_name="inventory_sites.csv", mime="text/csv")
 
@@ -7745,7 +7768,7 @@ elif PAGE_KEY == "Screens":
     t1, t2 = st.tabs(["📋 View", "➕ Add / Edit"])
 
     with t1:
-        st.dataframe(scr, use_container_width=True, height=520)
+        render_table_pro(scr, title='Screens found', hide_cols=infer_internal_cols(scr), date_cols=['installed_date','last_service_date','next_service_due','last_updated'], status_col='is_active', page_size_default=50)
         if (len(scr) > 0) and can(SECTION, "export", ROLE):
             st.download_button(
                 "⬇ Export screens (CSV)",
@@ -7817,7 +7840,7 @@ elif PAGE_KEY == "Service Center":
     )
 
     st.markdown(f"<span class='badge badge-strong'>Due: {len(due):,}</span>", unsafe_allow_html=True)
-    st.dataframe(due, use_container_width=True, height=420)
+    render_table_pro(due, title='Due for service', hide_cols=infer_internal_cols(due), date_cols=['installed_date','last_service_date','next_service_due'], page_size_default=50)
 
     st.markdown("### ✅ Mark serviced")
     if len(due):
@@ -7861,7 +7884,7 @@ elif PAGE_KEY == "Ad Sales Inventory":
     t1, t2 = st.tabs(["📋 View", "➕ Add / Edit"])
 
     with t1:
-        st.dataframe(ad, use_container_width=True, height=520)
+        render_table_pro(ad, title='Bookings', hide_cols=infer_internal_cols(ad), date_cols=['start_date','end_date','created_at','updated_at'], status_col='status', currency_cols=['amount','rent_pm'], page_size_default=50)
         if (not ad.empty) and can(SECTION, "export", ROLE):
             st.download_button(
                 "⬇ Export bookings (CSV)",
@@ -7958,7 +7981,7 @@ elif PAGE_KEY == "Agreements":
     st.markdown(f"<span class='badge badge-strong'>Agreements: {len(ag):,}</span>", unsafe_allow_html=True)
     t1,t2 = st.tabs(["📋 View", "➕ Add / Edit"])
     with t1:
-        st.dataframe(ag, use_container_width=True, height=520)
+        render_table_pro(ag, title='Agreements', hide_cols=infer_internal_cols(ag), date_cols=['start_date','end_date','created_at','updated_at'], status_col='status', currency_cols=['rent_pm','total_value'], page_size_default=50)
         if len(ag) and can(SECTION, "export", ROLE):
             st.download_button("⬇ Export agreements (CSV)", data=df_to_csv_bytes(ag), file_name="agreements.csv", mime="text/csv")
 
@@ -8060,7 +8083,7 @@ elif PAGE_KEY == "Billing & Reminders":
 
     t1, t2 = st.tabs(["📋 Due / Payments", "➕ Add / Update Payment"])
     with t1:
-        st.dataframe(pay, use_container_width=True, height=520)
+        render_table_pro(pay, title='Payments', hide_cols=infer_internal_cols(pay), date_cols=['bill_date','due_date','paid_date','created_at','updated_at'], status_col='status', currency_cols=['amount'], page_size_default=50)
         if len(pay) and can(SECTION, "export", ROLE):
             st.download_button("⬇ Export payments (CSV)", data=df_to_csv_bytes(pay), file_name="payments.csv", mime="text/csv")
 
@@ -8125,7 +8148,7 @@ elif PAGE_KEY == "Documents Vault":
 
     t1,t2 = st.tabs(["📋 View", "⬆ Upload"])
     with t1:
-        st.dataframe(docs, use_container_width=True, height=420)
+        render_table_pro(docs, title='Documents', hide_cols=infer_internal_cols(docs), date_cols=['issue_date','expiry_date','uploaded_at'], page_size_default=50)
         if len(docs) and can(SECTION, "export", ROLE):
             st.download_button("⬇ Export documents (CSV)", data=df_to_csv_bytes(docs), file_name="documents_vault.csv", mime="text/csv")
         if len(docs):
