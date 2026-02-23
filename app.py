@@ -362,6 +362,314 @@ def column_exists(table_name: str, column_name: str) -> bool:
         {"t": table_name, "c": column_name},
     )
     return bool(df.iloc[0]["ex"])
+
+# =========================================================
+# STEP-2 HELPERS: Surveys / Workorders / Milestones
+# =========================================================
+
+DEFAULT_MILESTONES = [
+    "Lead Qualified",
+    "Survey Scheduled",
+    "Survey Completed",
+    "Workorder Issued",
+    "Installation In Progress",
+    "Installed",
+    "Activated",
+]
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
+
+def _now_iso() -> str:
+    return pd.Timestamp.utcnow().isoformat()
+
+def _ensure_step2_tables_exist():
+    # Soft check: don't crash if user hasn't run SQL migrations yet
+    if "table_exists" in globals() and callable(globals()["table_exists"]):
+        for t in ["surveys", "workorders", "milestones"]:
+            if not table_exists(t):
+                st.info(f"Table '{t}' not found. Run Step-2 SQL migration in Supabase SQL Editor.")
+                return False
+    return True
+
+def get_inventory_site(property_id: str) -> dict | None:
+    if not property_id:
+        return None
+    df = qdf(
+        """SELECT * FROM inventory_sites WHERE property_id=:pid LIMIT 1""",
+        {"pid": str(property_id)},
+    )
+    return df.iloc[0].to_dict() if len(df) else None
+
+def list_surveys(section: str, property_id: str) -> pd.DataFrame:
+    if not _ensure_step2_tables_exist():
+        return pd.DataFrame()
+    return qdf(
+        """SELECT * FROM surveys
+           WHERE section=:s AND property_id=:pid
+           ORDER BY created_at DESC
+           LIMIT 50""",
+        {"s": section, "pid": str(property_id)},
+    )
+
+def list_workorders(section: str, property_id: str) -> pd.DataFrame:
+    if not _ensure_step2_tables_exist():
+        return pd.DataFrame()
+    return qdf(
+        """SELECT * FROM workorders
+           WHERE section=:s AND property_id=:pid
+           ORDER BY created_at DESC
+           LIMIT 200""",
+        {"s": section, "pid": str(property_id)},
+    )
+
+def list_milestones(section: str, property_id: str) -> pd.DataFrame:
+    if not _ensure_step2_tables_exist():
+        return pd.DataFrame()
+    return qdf(
+        """SELECT * FROM milestones
+           WHERE section=:s AND property_id=:pid
+           ORDER BY
+             CASE status WHEN 'Done' THEN 2 WHEN 'Blocked' THEN 1 ELSE 0 END,
+             due_date NULLS LAST,
+             created_at ASC
+        """,
+        {"s": section, "pid": str(property_id)},
+    )
+
+def ensure_default_milestones(section: str, property_id: str, username: str):
+    """
+    Creates default milestones once (unique index prevents duplicates).
+    """
+    if not _ensure_step2_tables_exist():
+        return
+    for name in DEFAULT_MILESTONES:
+        try:
+            exec_sql(
+                """
+                INSERT INTO milestones(milestone_id, section, property_id, name, status, created_by, created_at, updated_at)
+                VALUES(:id, :s, :pid, :name, 'Pending', :u, NOW(), NOW())
+                ON CONFLICT DO NOTHING
+                """,
+                {"id": _uuid(), "s": section, "pid": str(property_id), "name": name, "u": username},
+            )
+        except Exception:
+            # Don't break app if one insert fails
+            continue
+
+def upsert_survey(payload: dict, username: str, role: str):
+    # RBAC: treat as "edit" if survey_id exists else "add"
+    action = "edit" if payload.get("survey_id") else "add"
+    if not can_action(SECTION, action, role, username, entity_assigned_to=username, allow_assign=True) and not can(SECTION, action, role):
+        st.error("No permission for survey write.")
+        st.stop()
+
+    survey_id = str(payload.get("survey_id") or _uuid())
+    payload = payload.copy()
+    payload["survey_id"] = survey_id
+    payload.setdefault("created_by", username)
+
+    old = _fetch_one("SELECT * FROM surveys WHERE survey_id=:id", {"id": survey_id}) if _ensure_step2_tables_exist() else None
+
+    exec_sql(
+        """
+        INSERT INTO surveys(
+          survey_id, section, property_id, status, scheduled_on, completed_on,
+          surveyor, contact_person, contact_details,
+          site_feasible, power_available, internet_available,
+          mounting_type, screen_size, visibility_score, footfall_estimate,
+          notes, created_by, created_at, updated_at
+        )
+        VALUES(
+          :survey_id, :section, :property_id, :status, :scheduled_on, :completed_on,
+          :surveyor, :contact_person, :contact_details,
+          :site_feasible, :power_available, :internet_available,
+          :mounting_type, :screen_size, :visibility_score, :footfall_estimate,
+          :notes, :created_by, COALESCE(:created_at, NOW()), NOW()
+        )
+        ON CONFLICT(survey_id) DO UPDATE SET
+          status=EXCLUDED.status,
+          scheduled_on=EXCLUDED.scheduled_on,
+          completed_on=EXCLUDED.completed_on,
+          surveyor=EXCLUDED.surveyor,
+          contact_person=EXCLUDED.contact_person,
+          contact_details=EXCLUDED.contact_details,
+          site_feasible=EXCLUDED.site_feasible,
+          power_available=EXCLUDED.power_available,
+          internet_available=EXCLUDED.internet_available,
+          mounting_type=EXCLUDED.mounting_type,
+          screen_size=EXCLUDED.screen_size,
+          visibility_score=EXCLUDED.visibility_score,
+          footfall_estimate=EXCLUDED.footfall_estimate,
+          notes=EXCLUDED.notes,
+          updated_at=NOW()
+        """,
+        {
+            "survey_id": survey_id,
+            "section": payload.get("section"),
+            "property_id": payload.get("property_id"),
+            "status": payload.get("status", "Draft"),
+            "scheduled_on": payload.get("scheduled_on"),
+            "completed_on": payload.get("completed_on"),
+            "surveyor": payload.get("surveyor"),
+            "contact_person": payload.get("contact_person"),
+            "contact_details": payload.get("contact_details"),
+            "site_feasible": int(payload.get("site_feasible", 1)),
+            "power_available": int(payload.get("power_available", 1)),
+            "internet_available": int(payload.get("internet_available", 1)),
+            "mounting_type": payload.get("mounting_type"),
+            "screen_size": payload.get("screen_size"),
+            "visibility_score": payload.get("visibility_score"),
+            "footfall_estimate": payload.get("footfall_estimate"),
+            "notes": payload.get("notes"),
+            "created_by": payload.get("created_by", username),
+            "created_at": payload.get("created_at"),
+        },
+    )
+
+    new = _fetch_one("SELECT * FROM surveys WHERE survey_id=:id", {"id": survey_id})
+    audit(
+        username,
+        "UPSERT_SURVEY",
+        f"survey_id={survey_id} property_id={payload.get('property_id')}",
+        entity_table="surveys",
+        entity_id=survey_id,
+        operation="UPSERT",
+        old_data=old,
+        new_data=new,
+        changed_fields=_diff_fields(old, new),
+    )
+
+    # Auto milestone seeds
+    ensure_default_milestones(payload.get("section"), payload.get("property_id"), username)
+    # Auto advance a milestone
+    if str(payload.get("status", "")).lower() == "scheduled":
+        exec_sql("""UPDATE milestones SET status='Done', updated_at=NOW()
+                    WHERE section=:s AND property_id=:pid AND name='Survey Scheduled'""",
+                 {"s": payload.get("section"), "pid": str(payload.get("property_id"))})
+    if str(payload.get("status", "")).lower() == "completed":
+        exec_sql("""UPDATE milestones SET status='Done', completed_on=NOW()::text, updated_at=NOW()
+                    WHERE section=:s AND property_id=:pid AND name='Survey Completed'""",
+                 {"s": payload.get("section"), "pid": str(payload.get("property_id"))})
+
+def upsert_workorder(payload: dict, username: str, role: str):
+    action = "edit" if payload.get("workorder_id") else "add"
+    if not can_action(SECTION, action, role, username, entity_assigned_to=(payload.get("assigned_to") or username), allow_assign=True) and not can(SECTION, action, role):
+        st.error("No permission for workorder write.")
+        st.stop()
+
+    workorder_id = str(payload.get("workorder_id") or _uuid())
+    payload = payload.copy()
+    payload["workorder_id"] = workorder_id
+    payload.setdefault("created_by", username)
+
+    old = _fetch_one("SELECT * FROM workorders WHERE workorder_id=:id", {"id": workorder_id}) if _ensure_step2_tables_exist() else None
+
+    exec_sql(
+        """
+        INSERT INTO workorders(
+          workorder_id, section, property_id,
+          status, priority, assigned_to,
+          planned_install_date, installed_on,
+          installer_name, installer_contact,
+          material_required, estimated_cost, approved_budget,
+          notes, created_by, created_at, updated_at
+        )
+        VALUES(
+          :workorder_id, :section, :property_id,
+          :status, :priority, :assigned_to,
+          :planned_install_date, :installed_on,
+          :installer_name, :installer_contact,
+          :material_required, :estimated_cost, :approved_budget,
+          :notes, :created_by, COALESCE(:created_at, NOW()), NOW()
+        )
+        ON CONFLICT(workorder_id) DO UPDATE SET
+          status=EXCLUDED.status,
+          priority=EXCLUDED.priority,
+          assigned_to=EXCLUDED.assigned_to,
+          planned_install_date=EXCLUDED.planned_install_date,
+          installed_on=EXCLUDED.installed_on,
+          installer_name=EXCLUDED.installer_name,
+          installer_contact=EXCLUDED.installer_contact,
+          material_required=EXCLUDED.material_required,
+          estimated_cost=EXCLUDED.estimated_cost,
+          approved_budget=EXCLUDED.approved_budget,
+          notes=EXCLUDED.notes,
+          updated_at=NOW()
+        """,
+        {
+            "workorder_id": workorder_id,
+            "section": payload.get("section"),
+            "property_id": payload.get("property_id"),
+            "status": payload.get("status", "Open"),
+            "priority": payload.get("priority", "Medium"),
+            "assigned_to": payload.get("assigned_to"),
+            "planned_install_date": payload.get("planned_install_date"),
+            "installed_on": payload.get("installed_on"),
+            "installer_name": payload.get("installer_name"),
+            "installer_contact": payload.get("installer_contact"),
+            "material_required": payload.get("material_required"),
+            "estimated_cost": payload.get("estimated_cost"),
+            "approved_budget": payload.get("approved_budget"),
+            "notes": payload.get("notes"),
+            "created_by": payload.get("created_by", username),
+            "created_at": payload.get("created_at"),
+        },
+    )
+
+    new = _fetch_one("SELECT * FROM workorders WHERE workorder_id=:id", {"id": workorder_id})
+    audit(
+        username,
+        "UPSERT_WORKORDER",
+        f"workorder_id={workorder_id} property_id={payload.get('property_id')} status={payload.get('status')}",
+        entity_table="workorders",
+        entity_id=workorder_id,
+        operation="UPSERT",
+        old_data=old,
+        new_data=new,
+        changed_fields=_diff_fields(old, new),
+    )
+
+    ensure_default_milestones(payload.get("section"), payload.get("property_id"), username)
+
+    # Auto milestone advance
+    if str(payload.get("status", "")).lower() in ["open", "assigned", "in progress"]:
+        exec_sql("""UPDATE milestones SET status='Done', updated_at=NOW()
+                    WHERE section=:s AND property_id=:pid AND name='Workorder Issued'""",
+                 {"s": payload.get("section"), "pid": str(payload.get("property_id"))})
+    if str(payload.get("status", "")).lower() == "installed":
+        exec_sql("""UPDATE milestones SET status='Done', completed_on=NOW()::text, updated_at=NOW()
+                    WHERE section=:s AND property_id=:pid AND name='Installed'""",
+                 {"s": payload.get("section"), "pid": str(payload.get("property_id"))})
+
+def update_milestone(milestone_id: str, status: str, owner: str, due_date: str, notes: str, username: str):
+    old = _fetch_one("SELECT * FROM milestones WHERE milestone_id=:id", {"id": milestone_id})
+    exec_sql(
+        """
+        UPDATE milestones
+        SET status=:st,
+            owner=:own,
+            due_date=:due,
+            notes=:notes,
+            completed_on = CASE WHEN :st='Done' THEN COALESCE(completed_on, NOW()::text) ELSE completed_on END,
+            updated_at=NOW()
+        WHERE milestone_id=:id
+        """,
+        {"id": milestone_id, "st": status, "own": owner, "due": due_date, "notes": notes},
+    )
+    new = _fetch_one("SELECT * FROM milestones WHERE milestone_id=:id", {"id": milestone_id})
+    audit(
+        username,
+        "UPDATE_MILESTONE",
+        f"milestone_id={milestone_id} status={status}",
+        entity_table="milestones",
+        entity_id=milestone_id,
+        operation="UPDATE",
+        old_data=old,
+        new_data=new,
+        changed_fields=_diff_fields(old, new),
+    )
+
 # =========================================================
 # MAP HELPERS (Module-1 Step B2)
 # =========================================================
@@ -767,6 +1075,86 @@ def init_db_once():
     exec_sql("CREATE INDEX IF NOT EXISTS idx_payments_due ON payments(section, due_date)")
     exec_sql("CREATE INDEX IF NOT EXISTS idx_docs_vault_prop ON documents_vault(property_id)")
 
+    # =========================================================
+    # STEP-2 TABLES (Module-1): surveys, workorders, milestones
+    # =========================================================
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS surveys(
+      survey_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      property_id TEXT NOT NULL,
+      status TEXT DEFAULT 'Draft',
+      scheduled_on TEXT,
+      completed_on TEXT,
+      surveyor TEXT,
+      contact_person TEXT,
+      contact_details TEXT,
+      site_feasible INTEGER DEFAULT 1,
+      power_available INTEGER DEFAULT 1,
+      internet_available INTEGER DEFAULT 1,
+      mounting_type TEXT,
+      screen_size TEXT,
+      visibility_score INTEGER,
+      footfall_estimate INTEGER,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS workorders(
+      workorder_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      property_id TEXT NOT NULL,
+      status TEXT DEFAULT 'Open',
+      priority TEXT DEFAULT 'Medium',
+      assigned_to TEXT,
+      planned_install_date TEXT,
+      installed_on TEXT,
+      installer_name TEXT,
+      installer_contact TEXT,
+      material_required TEXT,
+      estimated_cost DOUBLE PRECISION,
+      approved_budget DOUBLE PRECISION,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    exec_sql("""
+    CREATE TABLE IF NOT EXISTS milestones(
+      milestone_id TEXT PRIMARY KEY,
+      section TEXT NOT NULL,
+      property_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT DEFAULT 'Pending',
+      due_date TEXT,
+      completed_on TEXT,
+      owner TEXT,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    # Indexes (safe)
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_surveys_section_property ON surveys(section, property_id)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_surveys_status ON surveys(section, status)")
+
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_workorders_section_property ON workorders(section, property_id)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_workorders_status ON workorders(section, status)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_workorders_assigned_to ON workorders(section, assigned_to)")
+
+    exec_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_milestones_property_name ON milestones(section, property_id, name)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_milestones_status ON milestones(section, status)")
+    exec_sql("CREATE INDEX IF NOT EXISTS idx_milestones_due ON milestones(section, due_date)")
+
+    
     # --- Seed permissions if empty ---
     c = int(qdf("SELECT COUNT(*) AS c FROM permissions").iloc[0]["c"] or 0)
     if c == 0:
@@ -4887,6 +5275,251 @@ elif PAGE_KEY == "Map View":
 
 else:
     st.info("This page is not implemented yet in this build.")
+elif PAGE_KEY == "Property 360 (Install)":
+    # Force Installation module for this page
+    if SECTION != SECTION_INSTALL:
+        st.info("Switch Module to Installation to use Property 360.")
+        st.stop()
+
+    page_title("🧩 Property 360 (Install)", "Survey → Workorder → Milestones for one property.")
+
+    pid = str(st.session_state.get("active_pid") or "").strip()
+
+    # Let user pick a property if none selected
+    inv = qdf("""
+        SELECT property_id, property_code, property_name, city, district
+        FROM inventory_sites
+        ORDER BY property_name
+        LIMIT 5000
+    """)
+    inv["property_id"] = inv["property_id"].fillna("").astype(str)
+    inv["__label"] = (
+        inv["property_code"].fillna("").astype(str)
+        + " | " + inv["property_name"].fillna("").astype(str)
+        + " | " + inv["city"].fillna("").astype(str)
+    ).str.strip(" |")
+
+    label_list = ["(Select)"] + inv["__label"].tolist()
+    label_to_pid = dict(zip(inv["__label"], inv["property_id"]))
+
+    cA, cB = st.columns([3, 1])
+    with cA:
+        default_idx = 0
+        if pid:
+            # try to pick default label
+            try:
+                cur = inv[inv["property_id"] == pid].iloc[0]["__label"]
+                default_idx = label_list.index(cur) if cur in label_list else 0
+            except Exception:
+                default_idx = 0
+        pick_label = st.selectbox("Select Property", label_list, index=default_idx)
+
+    with cB:
+        if st.button("Use Selected", type="primary"):
+            if pick_label != "(Select)":
+                st.session_state["active_pid"] = str(label_to_pid.get(pick_label, "")).strip()
+                st.rerun()
+
+    pid = str(st.session_state.get("active_pid") or "").strip()
+    if not pid:
+        st.info("Select a property from Map View (Set as Active) OR choose from the dropdown above.")
+        st.stop()
+
+    site = get_inventory_site(pid)
+    if not site:
+        st.warning("This property_id was not found in inventory_sites.")
+        st.stop()
+
+    ensure_default_milestones(SECTION, pid, USER)
+
+    st.markdown(
+        f"**{site.get('property_code','')} | {site.get('property_name','')} | {site.get('city','')}**  \n"
+        f"{site.get('property_address','')}"
+    )
+
+    gm = google_maps_url(str(site.get("property_name","")), str(site.get("property_address","")))
+    st.markdown(f"[📍 Open in Google Maps]({gm})")
+
+    tabs = st.tabs(["🧾 Survey", "🛠 Workorders", "✅ Milestones"])
+
+    # -------------------------
+    # TAB 1: Survey
+    # -------------------------
+    with tabs[0]:
+        if not _ensure_step2_tables_exist():
+            st.stop()
+
+        surveys = list_surveys(SECTION, pid)
+        st.caption(f"Surveys: {len(surveys)}")
+        if len(surveys):
+            st.dataframe(surveys, use_container_width=True, height=220)
+
+        row = surveys.iloc[0].to_dict() if len(surveys) else {}
+
+        with st.form("survey_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                status = st.selectbox("Status", ["Draft", "Scheduled", "Completed", "Rejected"],
+                                      index=(["Draft", "Scheduled", "Completed", "Rejected"].index(row.get("status","Draft"))
+                                             if row.get("status","Draft") in ["Draft","Scheduled","Completed","Rejected"] else 0))
+                scheduled_on = st.text_input("Scheduled on (YYYY-MM-DD)", value=str(row.get("scheduled_on","") or ""))
+                completed_on = st.text_input("Completed on (YYYY-MM-DD)", value=str(row.get("completed_on","") or ""))
+            with c2:
+                surveyor = st.text_input("Surveyor", value=str(row.get("surveyor","") or USER))
+                contact_person = st.text_input("Contact person", value=str(row.get("contact_person","") or (site.get("contact_person","") or "")))
+                contact_details = st.text_input("Contact details", value=str(row.get("contact_details","") or (site.get("contact_details","") or "")))
+            with c3:
+                site_feasible = st.selectbox("Site feasible?", [1, 0], index=0 if int(row.get("site_feasible",1) or 1) == 1 else 1, format_func=lambda x: "Yes" if x==1 else "No")
+                power_available = st.selectbox("Power available?", [1, 0], index=0 if int(row.get("power_available",1) or 1) == 1 else 1, format_func=lambda x: "Yes" if x==1 else "No")
+                internet_available = st.selectbox("Internet available?", [1, 0], index=0 if int(row.get("internet_available",1) or 1) == 1 else 1, format_func=lambda x: "Yes" if x==1 else "No")
+
+            c4, c5, c6 = st.columns(3)
+            with c4:
+                mounting_type = st.text_input("Mounting type", value=str(row.get("mounting_type","") or ""))
+            with c5:
+                screen_size = st.text_input("Screen size", value=str(row.get("screen_size","") or ""))
+            with c6:
+                visibility_score = st.number_input("Visibility (1-5)", 1, 5, int(row.get("visibility_score") or 3))
+
+            footfall_estimate = st.number_input("Footfall estimate (daily)", 0, 1000000, int(row.get("footfall_estimate") or 0))
+            notes = st.text_area("Notes", value=str(row.get("notes","") or ""), height=90)
+
+            save = st.form_submit_button("💾 Save Survey", type="primary")
+
+        if save:
+            upsert_survey(
+                {
+                    "survey_id": row.get("survey_id"),
+                    "section": SECTION,
+                    "property_id": pid,
+                    "status": status,
+                    "scheduled_on": scheduled_on.strip(),
+                    "completed_on": completed_on.strip(),
+                    "surveyor": surveyor.strip(),
+                    "contact_person": contact_person.strip(),
+                    "contact_details": contact_details.strip(),
+                    "site_feasible": int(site_feasible),
+                    "power_available": int(power_available),
+                    "internet_available": int(internet_available),
+                    "mounting_type": mounting_type.strip(),
+                    "screen_size": screen_size.strip(),
+                    "visibility_score": int(visibility_score),
+                    "footfall_estimate": int(footfall_estimate),
+                    "notes": notes.strip(),
+                },
+                username=USER,
+                role=ROLE,
+            )
+            st.success("Survey saved.")
+            st.rerun()
+
+    # -------------------------
+    # TAB 2: Workorders
+    # -------------------------
+    with tabs[1]:
+        if not _ensure_step2_tables_exist():
+            st.stop()
+
+        wos = list_workorders(SECTION, pid)
+        st.caption(f"Workorders: {len(wos)}")
+        if len(wos):
+            st.dataframe(wos, use_container_width=True, height=240)
+
+        wo_row = wos.iloc[0].to_dict() if len(wos) else {}
+
+        with st.form("wo_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                wo_status = st.selectbox("Status", ["Open", "Assigned", "In Progress", "Installed", "Closed", "Cancelled"],
+                                         index=(["Open","Assigned","In Progress","Installed","Closed","Cancelled"].index(wo_row.get("status","Open"))
+                                                if wo_row.get("status","Open") in ["Open","Assigned","In Progress","Installed","Closed","Cancelled"] else 0))
+                priority = st.selectbox("Priority", ["Low", "Medium", "High"],
+                                        index=(["Low","Medium","High"].index(wo_row.get("priority","Medium"))
+                                               if wo_row.get("priority","Medium") in ["Low","Medium","High"] else 1))
+            with c2:
+                assigned_to = st.text_input("Assigned to", value=str(wo_row.get("assigned_to","") or USER))
+                planned_install_date = st.text_input("Planned install date (YYYY-MM-DD)", value=str(wo_row.get("planned_install_date","") or ""))
+            with c3:
+                installed_on = st.text_input("Installed on (YYYY-MM-DD)", value=str(wo_row.get("installed_on","") or ""))
+                installer_name = st.text_input("Installer name", value=str(wo_row.get("installer_name","") or ""))
+                installer_contact = st.text_input("Installer contact", value=str(wo_row.get("installer_contact","") or ""))
+
+            material_required = st.text_area("Material required", value=str(wo_row.get("material_required","") or ""), height=60)
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                estimated_cost = st.number_input("Estimated cost", 0.0, 1e12, float(wo_row.get("estimated_cost") or 0.0))
+            with cc2:
+                approved_budget = st.number_input("Approved budget", 0.0, 1e12, float(wo_row.get("approved_budget") or 0.0))
+            wo_notes = st.text_area("Notes", value=str(wo_row.get("notes","") or ""), height=80)
+
+            save_wo = st.form_submit_button("💾 Save Workorder", type="primary")
+
+        if save_wo:
+            upsert_workorder(
+                {
+                    "workorder_id": wo_row.get("workorder_id"),
+                    "section": SECTION,
+                    "property_id": pid,
+                    "status": wo_status,
+                    "priority": priority,
+                    "assigned_to": assigned_to.strip(),
+                    "planned_install_date": planned_install_date.strip(),
+                    "installed_on": installed_on.strip(),
+                    "installer_name": installer_name.strip(),
+                    "installer_contact": installer_contact.strip(),
+                    "material_required": material_required.strip(),
+                    "estimated_cost": float(estimated_cost),
+                    "approved_budget": float(approved_budget),
+                    "notes": wo_notes.strip(),
+                },
+                username=USER,
+                role=ROLE,
+            )
+            st.success("Workorder saved.")
+            st.rerun()
+
+    # -------------------------
+    # TAB 3: Milestones
+    # -------------------------
+    with tabs[2]:
+        if not _ensure_step2_tables_exist():
+            st.stop()
+
+        ms = list_milestones(SECTION, pid)
+        st.caption(f"Milestones: {len(ms)}")
+
+        if not len(ms):
+            st.info("No milestones yet. They will be created automatically when you save Survey/Workorder.")
+            st.stop()
+
+        for _, r in ms.iterrows():
+            with st.expander(f"{r.get('name')} — {r.get('status')}", expanded=False):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.write("**Name:**", r.get("name"))
+                    st.write("**Completed:**", r.get("completed_on") or "")
+                with c2:
+                    new_status = st.selectbox("Status", ["Pending", "Done", "Blocked"],
+                                              index=(["Pending","Done","Blocked"].index(r.get("status","Pending"))
+                                                     if r.get("status","Pending") in ["Pending","Done","Blocked"] else 0),
+                                              key=f"ms_status_{r.get('milestone_id')}")
+                    new_owner = st.text_input("Owner", value=str(r.get("owner","") or ""), key=f"ms_owner_{r.get('milestone_id')}")
+                with c3:
+                    new_due = st.text_input("Due date (YYYY-MM-DD)", value=str(r.get("due_date","") or ""), key=f"ms_due_{r.get('milestone_id')}")
+                    new_notes = st.text_area("Notes", value=str(r.get("notes","") or ""), height=70, key=f"ms_notes_{r.get('milestone_id')}")
+
+                if st.button("Update milestone", key=f"ms_btn_{r.get('milestone_id')}", type="primary"):
+                    update_milestone(
+                        milestone_id=str(r.get("milestone_id")),
+                        status=new_status,
+                        owner=new_owner.strip(),
+                        due_date=new_due.strip(),
+                        notes=new_notes.strip(),
+                        username=USER,
+                    )
+                    st.success("Milestone updated.")
+                    st.rerun()
+
 # ---- Call the router ----
 render_page(PAGE_KEY)
 st.stop()
