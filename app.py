@@ -4549,8 +4549,12 @@ elif PAGE_KEY == "Leads Pipeline":
     pid = rev.get(sel, "")
     pid = str(pid) if pid else ""
     st.session_state["active_pid"] = pid
-    row = df[df["__hash"].astype("string") == pid].iloc[0].to_dict()
-
+       m = df[df["__hash"].astype("string") == pid]
+    if m.empty:
+        st.warning("Active property not found in this Lead list (pid is property_id, not lead __hash). Select from Lead list or set active from Map/Inventory.")
+        st.stop()
+    row = m.iloc[0].to_dict()
+    
     st.markdown(f"**{pid_to_code.get(pid, pid[:6])} — {row.get('Property Name','')}**")
     st.caption(row.get("Property Address", ""))
 
