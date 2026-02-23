@@ -834,6 +834,109 @@ def _cards_view(df: pd.DataFrame, id_col="__hash"):
                 st.write("**Notes:**", notes)
             st.caption(f"Record: {rid}")
 
+
+
+# =========================================================
+# INVENTORY (SITES) — UI HELPERS (ADD ONLY)
+# =========================================================
+
+@st.cache_data(show_spinner=False, ttl=180)
+def _load_inventory_sites_cached(limit: int = 2000) -> pd.DataFrame:
+    # Read-only cached fetch for snappy UI
+    limit = int(limit or 2000)
+    limit = max(100, min(limit, 20000))
+    return qdf(
+        """SELECT property_id, property_code, district, city, property_name, property_address,
+                  contact_person, contact_details, no_screens_installed, agreed_rent_pm, last_updated
+           FROM inventory_sites
+           ORDER BY last_updated DESC
+           LIMIT :lim""",
+        {"lim": limit},
+    )
+
+def _init_inv_filters_state():
+    if "inv_filters" not in st.session_state:
+        st.session_state["inv_filters"] = {
+            "q": "",
+            "district": [],
+            "city": [],
+            "min_screens": None,
+            "page": 1,
+            "page_size": 200,
+            "view_mode": "Table",  # Table | Cards
+            "compact": True,
+            "limit": 2000,
+        }
+
+def _ensure_inv_search(df: pd.DataFrame) -> pd.DataFrame:
+    if "__search" in df.columns:
+        return df
+    cols = [c for c in [
+        "property_code", "district", "city", "property_name", "property_address",
+        "contact_person", "contact_details"
+    ] if c in df.columns]
+    if not cols:
+        df["__search"] = ""
+        return df
+    df["__search"] = df[cols].fillna("").astype("string").agg(" | ".join, axis=1).str.lower()
+    return df
+
+def _apply_inventory_filters(df_in: pd.DataFrame, f: dict) -> pd.DataFrame:
+    df = df_in.copy()
+    df = _ensure_inv_search(df)
+
+    q = (f.get("q") or "").strip().lower()
+    if q:
+        df = df[df["__search"].astype("string").str.contains(q, na=False)]
+
+    dsel = f.get("district") or []
+    if dsel and "district" in df.columns:
+        df = df[df["district"].isin(dsel)]
+
+    csel = f.get("city") or []
+    if csel and "city" in df.columns:
+        df = df[df["city"].isin(csel)]
+
+    min_s = f.get("min_screens", None)
+    if min_s is not None and "no_screens_installed" in df.columns:
+        try:
+            min_s = int(min_s)
+            df = df[pd.to_numeric(df["no_screens_installed"], errors="coerce").fillna(0) >= min_s]
+        except Exception:
+            pass
+
+    return df
+
+def _inventory_label(row: pd.Series) -> str:
+    code = str(row.get("property_code", "") or "").strip()
+    name = str(row.get("property_name", "") or "").strip()
+    city = str(row.get("city", "") or "").strip()
+    bits = [b for b in [code, name, city] if b]
+    return " | ".join(bits) if bits else str(row.get("property_id", "") or "")
+
+def _inventory_cards_view(df: pd.DataFrame):
+    if df is None or len(df) == 0:
+        st.info("No results. Try clearing filters.")
+        return
+
+    df2 = df.head(120).copy()
+    for _, r in df2.iterrows():
+        title = _inventory_label(r)
+        with st.expander(title, expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**District:**", r.get("district", ""))
+                st.write("**City:**", r.get("city", ""))
+                st.write("**Screens installed:**", r.get("no_screens_installed", ""))
+                st.write("**Agreed rent (PM):**", r.get("agreed_rent_pm", ""))
+            with c2:
+                st.write("**Contact person:**", r.get("contact_person", ""))
+                st.write("**Contact details:**", r.get("contact_details", ""))
+                st.write("**Last updated:**", r.get("last_updated", ""))
+            addr = str(r.get("property_address", "") or "")
+            if addr:
+                st.write("**Address:**", addr)
+
 # =========================================================
 # DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL
 # =========================================================
@@ -2747,13 +2850,146 @@ def page_leads_pipeline():
                 st.exception(e)
 
 def page_inventory_sites():
-    page_title("Inventory (Sites)", "Master sites inventory")
-    df = qdf("""SELECT property_id, property_code, district, city, property_name, property_address,
-                      contact_person, contact_details, no_screens_installed, agreed_rent_pm, last_updated
-               FROM inventory_sites
-               ORDER BY last_updated DESC
-               LIMIT 500""")
-    st.dataframe(df, use_container_width=True)
+    page_title("Inventory (Sites)", "Master sites inventory (fast + responsive)")
+    _init_inv_filters_state()
+    f = st.session_state["inv_filters"]
+
+    st.markdown('<div class="sticky-wrap">', unsafe_allow_html=True)
+    with st.form("inv_filters_form", clear_on_submit=False):
+        c1, c2, c3, c4, c5 = st.columns([2.0, 1.2, 1.2, 1.0, 1.0])
+        with c1:
+            q_in = st.text_input("Search sites", value=f.get("q", ""), placeholder="code / name / address / contact")
+        with c2:
+            limit_in = st.selectbox(
+                "Load",
+                [500, 1000, 2000, 5000, 10000],
+                index=[500, 1000, 2000, 5000, 10000].index(int(f.get("limit", 2000)) if int(f.get("limit", 2000)) in [500, 1000, 2000, 5000, 10000] else 2000),
+            )
+        with c3:
+            page_size = st.selectbox(
+                "Rows/page",
+                [50, 100, 200, 500, 1000],
+                index=[50, 100, 200, 500, 1000].index(int(f.get("page_size", 200)) if int(f.get("page_size", 200)) in [50, 100, 200, 500, 1000] else 200),
+            )
+        with c4:
+            view_mode = st.selectbox("View", ["Table", "Cards"], index=0 if f.get("view_mode", "Table") == "Table" else 1)
+        with c5:
+            compact = st.toggle("Compact", value=bool(f.get("compact", True)))
+
+        # Load base data (cached) for filter options
+        df_base = _load_inventory_sites_cached(limit=int(limit_in))
+        d_opts = sorted([x for x in df_base.get("district", pd.Series(dtype="object")).dropna().astype(str).unique().tolist() if x.strip()])
+        c_opts = sorted([x for x in df_base.get("city", pd.Series(dtype="object")).dropna().astype(str).unique().tolist() if x.strip()])
+
+        c6, c7, c8 = st.columns([1.4, 1.4, 1.2])
+        with c6:
+            district_in = st.multiselect("District", d_opts, default=f.get("district", []))
+        with c7:
+            city_in = st.multiselect("City", c_opts, default=f.get("city", []))
+        with c8:
+            min_screens_in = st.number_input("Min screens", min_value=0, value=int(f.get("min_screens") or 0), step=1)
+
+        b1, b2, b3 = st.columns([1.2, 1.0, 1.2])
+        with b1:
+            apply_btn = st.form_submit_button("✅ Apply Filters", type="primary")
+        with b2:
+            clear_btn = st.form_submit_button("🧹 Clear")
+        with b3:
+            refresh_btn = st.form_submit_button("🔄 Refresh data")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if refresh_btn:
+        _load_inventory_sites_cached.clear()
+        st.rerun()
+
+    if clear_btn:
+        st.session_state["inv_filters"] = {
+            "q": "",
+            "district": [],
+            "city": [],
+            "min_screens": None,
+            "page": 1,
+            "page_size": 200,
+            "view_mode": "Table",
+            "compact": True,
+            "limit": int(limit_in),
+        }
+        st.rerun()
+
+    if apply_btn:
+        f["q"] = q_in
+        f["district"] = district_in
+        f["city"] = city_in
+        f["min_screens"] = int(min_screens_in) if min_screens_in is not None else None
+        f["page_size"] = int(page_size)
+        f["view_mode"] = view_mode
+        f["compact"] = bool(compact)
+        f["limit"] = int(limit_in)
+        f["page"] = 1
+        st.session_state["inv_filters"] = f
+
+    with st.spinner("Loading inventory…"):
+        df_all = _load_inventory_sites_cached(limit=int(st.session_state["inv_filters"].get("limit", 2000)))
+        df_filtered = _apply_inventory_filters(df_all, st.session_state["inv_filters"])
+
+    # Summary badges
+    chips = []
+    if (st.session_state["inv_filters"].get("q") or "").strip():
+        chips.append(f"Search: {(st.session_state['inv_filters'].get('q') or '').strip()}")
+    if st.session_state["inv_filters"].get("district"):
+        chips.append("District: " + ", ".join(st.session_state["inv_filters"]["district"][:4]) + ("…" if len(st.session_state["inv_filters"]["district"]) > 4 else ""))
+    if st.session_state["inv_filters"].get("city"):
+        chips.append("City: " + ", ".join(st.session_state["inv_filters"]["city"][:4]) + ("…" if len(st.session_state["inv_filters"]["city"]) > 4 else ""))
+    if st.session_state["inv_filters"].get("min_screens") not in [None, 0]:
+        chips.append(f"Min screens: {st.session_state['inv_filters']['min_screens']}")
+
+    left, right = st.columns([3, 2])
+    with left:
+        st.markdown(
+            f"<span class='badge badge-strong'>Showing {len(df_filtered):,}</span>"
+            f"<span class='badge'>Loaded {len(df_all):,}</span>",
+            unsafe_allow_html=True,
+        )
+        if chips:
+            for ch in chips:
+                st.markdown(f"<span class='badge'>{ch}</span>", unsafe_allow_html=True)
+        else:
+            st.caption("No filters applied.")
+    with right:
+        page = int(st.session_state["inv_filters"].get("page", 1) or 1)
+        page_size = int(st.session_state["inv_filters"].get("page_size", 200) or 200)
+        df_page, pages = _paginate_df(df_filtered, page=page, page_size=page_size)
+        p1, p2, p3 = st.columns([1, 1, 1])
+        with p1:
+            if st.button("⬅ Prev", disabled=(page <= 1)):
+                st.session_state["inv_filters"]["page"] = max(1, page - 1)
+                st.rerun()
+        with p2:
+            st.markdown(f"<div class='small' style='text-align:center;padding-top:.5rem;'>Page <b>{page}</b> / {pages}</div>", unsafe_allow_html=True)
+        with p3:
+            if st.button("Next ➡", disabled=(page >= pages)):
+                st.session_state["inv_filters"]["page"] = min(pages, page + 1)
+                st.rerun()
+
+    if df_filtered is None or len(df_filtered) == 0:
+        st.info("No sites match your filters. Click **Clear** to reset.")
+        return
+
+    if st.session_state["inv_filters"].get("view_mode") == "Cards":
+        _inventory_cards_view(df_page)
+    else:
+        if bool(st.session_state["inv_filters"].get("compact", True)):
+            show_cols = ["property_code", "district", "city", "property_name", "no_screens_installed", "agreed_rent_pm", "last_updated"]
+        else:
+            show_cols = [
+                "property_id", "property_code", "district", "city", "property_name", "property_address",
+                "contact_person", "contact_details", "no_screens_installed", "agreed_rent_pm", "last_updated"
+            ]
+        for c in show_cols:
+            if c not in df_page.columns:
+                df_page[c] = ""
+        st.dataframe(df_page[show_cols], use_container_width=True, height=560)
 
 def page_screens():
     page_title("Screens", "Installed screens + service info")
