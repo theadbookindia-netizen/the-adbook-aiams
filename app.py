@@ -2091,7 +2091,6 @@ def page_whatsapp():
 def page_reports():
     page_title("Reports", "Exports + operational summaries")
     st.info("Add exports here (CSV/PDF) based on section & filters.")
-
 def page_admin_panel():
     page_title("Admin Panel", "Users + permissions + system settings")
 
@@ -2111,7 +2110,6 @@ def page_admin_panel():
     # =====================================================
     with tab1:
         with st.form("create_user_form"):
-
             username = st.text_input("Username").strip()
 
             role = st.selectbox(
@@ -2132,30 +2130,20 @@ def page_admin_panel():
 
             temp_password = ""
             if password_mode == "Set Manually":
-                temp_password = st.text_input(
-                    "Temporary Password",
-                    type="password"
-                )
+                temp_password = st.text_input("Temporary Password", type="password")
 
-            submit = st.form_submit_button("Create User")
+            submit = st.form_submit_button("Create User", type="primary")
 
         if submit:
-
             if not username:
                 st.error("Username is required.")
                 return
 
-            # Check if user exists
-            exists = qdf(
-                "SELECT 1 FROM users WHERE username=:u",
-                {"u": username}
-            )
-
-            if len(exists):
+            exists = qdf("SELECT 1 FROM users WHERE username=:u", {"u": username})
+            if exists is not None and len(exists):
                 st.error("User already exists.")
                 return
 
-            # Generate password if needed
             if password_mode == "Auto Generate":
                 temp_password = uuid.uuid4().hex[:10]
 
@@ -2165,7 +2153,6 @@ def page_admin_panel():
 
             password_hash = pbkdf2_hash(temp_password)
 
-            # Insert user
             exec_sql(
                 """
                 INSERT INTO users
@@ -2182,7 +2169,6 @@ def page_admin_panel():
                 },
             )
 
-            # Audit
             audit(
                 USER,
                 "USER_CREATE",
@@ -2212,55 +2198,42 @@ def page_admin_panel():
     # TAB 2: EDIT USER
     # =====================================================
     with tab2:
-
-        users_df = qdf(
-            "SELECT username, role, section_scope, is_active FROM users ORDER BY username"
-        )
-
-        if len(users_df) == 0:
+        users_df = qdf("SELECT username, role, section_scope, is_active FROM users ORDER BY username")
+        if users_df is None or len(users_df) == 0:
             st.warning("No users found.")
             return
 
-        selected = st.selectbox(
-            "Select User",
-            users_df["username"].tolist()
-        )
+        selected = st.selectbox("Select User", users_df["username"].tolist(), key="edit_user_select")
+        user_row = get_user(selected) or {}
 
-        user_row = get_user(selected)
-
-        with st.form("edit_user_form"):
-
-           roles_list = list(ROLE_LABEL.keys())
-
-        # Canonicalize stored role (handles old/legacy role names)
+        roles_list = list(ROLE_LABEL.keys())
         stored_role = canonical_role(user_row.get("role", ""), user_row.get("section_scope"))
 
-        # Safe index (prevents ValueError)
         try:
             role_index = roles_list.index(stored_role)
         except ValueError:
-            role_index = 0  # fallback (or set to roles_list.index(ROLE_SUPER_ADMIN) if you want)
+            role_index = 0  # safe fallback
 
-        new_role = st.selectbox(
-            "Role",
-            roles_list,
-            index=role_index,
-            format_func=lambda x: ROLE_LABEL.get(x, x),
-        )
+        with st.form("edit_user_form"):
+            new_role = st.selectbox(
+                "Role",
+                roles_list,
+                index=role_index,
+                format_func=lambda x: ROLE_LABEL.get(x, x),
+            )
 
-        new_scope = role_default_scope(new_role)
-        st.text_input("Module Scope (Auto)", value=new_scope, disabled=True)
+            new_scope = role_default_scope(new_role)
+            st.text_input("Module Scope (Auto)", value=new_scope, disabled=True)
 
-        new_active = st.checkbox(
-            "Active",
-             value=int(user_row["is_active"]) == 1,
-         )
+            new_active = st.checkbox(
+                "Active",
+                value=int(user_row.get("is_active", 1) or 0) == 1,
+            )
 
-            save = st.form_submit_button("Save Changes")
+            save = st.form_submit_button("Save Changes", type="primary")
 
         if save:
-
-            old = get_user(selected)
+            old = get_user(selected) or {}
 
             exec_sql(
                 """
@@ -2279,7 +2252,7 @@ def page_admin_panel():
                 },
             )
 
-            new = get_user(selected)
+            new = get_user(selected) or {}
 
             audit(
                 USER,
@@ -2288,8 +2261,18 @@ def page_admin_panel():
                 entity_table="users",
                 entity_id=selected,
                 operation="UPDATE",
-                old_data=old,
-                new_data=new,
+                old_data={
+                    "username": old.get("username"),
+                    "role": old.get("role"),
+                    "section_scope": old.get("section_scope"),
+                    "is_active": old.get("is_active"),
+                },
+                new_data={
+                    "username": new.get("username"),
+                    "role": new.get("role"),
+                    "section_scope": new.get("section_scope"),
+                    "is_active": new.get("is_active"),
+                },
                 changed_fields=[
                     "role",
                     "section_scope",
@@ -2303,33 +2286,23 @@ def page_admin_panel():
     # TAB 3: RESET PASSWORD
     # =====================================================
     with tab3:
+        users_df = qdf("SELECT username FROM users ORDER BY username")
+        if users_df is None or len(users_df) == 0:
+            st.warning("No users found.")
+            return
 
-        users_df = qdf(
-            "SELECT username FROM users ORDER BY username"
-        )
-
-        selected = st.selectbox(
-            "Select User",
-            users_df["username"].tolist(),
-            key="reset_user",
-        )
+        selected = st.selectbox("Select User", users_df["username"].tolist(), key="reset_user")
 
         with st.form("reset_pw_form"):
-
-            new_pw = st.text_input(
-                "New Password",
-                type="password"
-            )
-
-            reset = st.form_submit_button("Reset Password")
+            new_pw = st.text_input("New Password", type="password")
+            reset = st.form_submit_button("Reset Password", type="primary")
 
         if reset:
-
             if not new_pw:
                 st.error("Password required.")
                 return
 
-            old = get_user(selected)
+            old = get_user(selected) or {}
 
             exec_sql(
                 """
@@ -2344,7 +2317,7 @@ def page_admin_panel():
                 },
             )
 
-            new = get_user(selected)
+            new = get_user(selected) or {}
 
             audit(
                 USER,
@@ -2353,8 +2326,18 @@ def page_admin_panel():
                 entity_table="users",
                 entity_id=selected,
                 operation="UPDATE",
-                old_data=old,
-                new_data=new,
+                old_data={
+                    "username": old.get("username"),
+                    "role": old.get("role"),
+                    "section_scope": old.get("section_scope"),
+                    "is_active": old.get("is_active"),
+                },
+                new_data={
+                    "username": new.get("username"),
+                    "role": new.get("role"),
+                    "section_scope": new.get("section_scope"),
+                    "is_active": new.get("is_active"),
+                },
                 changed_fields=["password_hash"],
             )
 
