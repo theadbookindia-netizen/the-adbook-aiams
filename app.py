@@ -4645,34 +4645,105 @@ DATA_FILE = globals().get("DATA_FILE", "leads.csv")
 def read_leads_file(upload=None):
     """
     Returns (leads_df, version_key)
-    Works for:
-      - upload from st.file_uploader
-      - local file fallback (DATA_FILE)
+
+    Robust reader for CSV / XLSX uploads:
+      - Handles common encodings (utf-8-sig, utf-8, cp1252, latin1)
+      - Handles delimiter variations (, ; \t |)
+      - Falls back safely with decoding errors replaced (prevents UnicodeDecodeError)
+      - Supports Excel (.xlsx/.xls) if user uploads an Excel file
     """
+    def _read_csv_bytes(raw: bytes) -> pd.DataFrame:
+        # Try to sniff delimiter from a decoded sample (best-effort)
+        sample_delims = [",", ";", "\t", "|"]
+        encodings = ["utf-8-sig", "utf-8", "cp1252", "latin1"]
+        last_err = None
+
+        # Try read with a few encodings + delimiter sniff
+        for enc in encodings:
+            try:
+                # decode small sample for delimiter sniff
+                sample_txt = raw[:65536].decode(enc, errors="replace")
+                delim = None
+                try:
+                    import csv as _csv
+                    sniffer = _csv.Sniffer()
+                    dialect = sniffer.sniff(sample_txt, delimiters=",".join([",", ";", "\t", "|"]))
+                    delim = dialect.delimiter
+                except Exception:
+                    delim = None
+
+                # If sniff failed, try common delims
+                delims_to_try = [delim] if delim else []
+                for d in sample_delims:
+                    if d not in delims_to_try:
+                        delims_to_try.append(d)
+
+                for d in delims_to_try:
+                    try:
+                        return pd.read_csv(
+                            io.BytesIO(raw),
+                            encoding=enc,
+                            sep=d,
+                            engine="python",
+                            on_bad_lines="skip",
+                        )
+                    except Exception as e:
+                        last_err = e
+                        continue
+
+            except Exception as e:
+                last_err = e
+                continue
+
+        # Final fallback: pandas default (may still work in some cases)
+        try:
+            return pd.read_csv(io.BytesIO(raw), engine="python", on_bad_lines="skip")
+        except Exception as e:
+            last_err = e
+            raise last_err
+
     # Local fallback if no upload provided
     if upload is None:
         if not os.path.exists(DATA_FILE):
             st.error(f"Missing {DATA_FILE}. Upload a file OR add {DATA_FILE} to repo.")
             st.stop()
-        df = pd.read_csv(DATA_FILE)
+
+        # Support local Excel too (in case you switch)
+        if str(DATA_FILE).lower().endswith((".xlsx", ".xls")):
+            df = pd.read_excel(DATA_FILE)
+        else:
+            try:
+                df = pd.read_csv(DATA_FILE)
+            except UnicodeDecodeError:
+                raw = Path(DATA_FILE).read_bytes()
+                df = _read_csv_bytes(raw)
+
         version_key = f"local:{os.path.getmtime(DATA_FILE)}"
     else:
         raw = upload.getvalue()
+        name = (getattr(upload, "name", "") or "").lower()
         version_key = f"upload:{len(raw)}:{hash(raw)}"
-        df = pd.read_csv(io.BytesIO(raw))
+
+        # Excel uploads
+        if name.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(io.BytesIO(raw))
+        else:
+            try:
+                df = pd.read_csv(io.BytesIO(raw))
+            except UnicodeDecodeError:
+                df = _read_csv_bytes(raw)
 
     # Normalize columns
     df.columns = [str(c).strip() for c in df.columns]
 
     # If your app has prepare_leads_df(), apply it (keeps your existing behavior)
-    if "prepare_leads_df" in globals() and callable(globals()["prepare_leads_df"]):
-        df = prepare_leads_df(df)
+    if "prepare_leads_df" in globals():
+        try:
+            df = prepare_leads_df(df)
+        except Exception:
+            pass
 
     return df, version_key
-
-# =========================================================
-# ACCESS CONTROL (must be defined BEFORE sidebar uses it)
-# =========================================================
 def require_module_access(section: str):
     """
     Blocks access if user tries to open a module outside their scope.
