@@ -17,6 +17,25 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import NullPool
 import pydeck as pdk
 
+# =========================================================
+# SAFE STRING HELPERS (UI only)
+# =========================================================
+def _safe_str(v) -> str:
+    """Convert None/NaN/number to clean string safely."""
+    try:
+        import pandas as _pd
+        if v is None or _pd.isna(v):
+            return ""
+    except Exception:
+        if v is None:
+            return ""
+    try:
+        return str(v).strip()
+    except Exception:
+        return ""
+
+
+
 # ---- PDF (Cloud-safe) ----
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -746,6 +765,11 @@ def _init_leads_filters_state():
             "compact": True,
         }
 
+
+def _init_lp_filters_state():
+    """Backward-compatible alias used by some UI blocks."""
+    _init_leads_filters_state()
+
 def _applied_filters_summary(f: dict) -> list[str]:
     chips = []
     if (f.get("q") or "").strip():
@@ -801,7 +825,7 @@ def _paginate_df(df: pd.DataFrame, page: int, page_size: int) -> tuple[pd.DataFr
 def _lead_label(row: pd.Series) -> str:
     name = str(row.get("Property Name", "") or "").strip()
     city = str(row.get("City", "") or "").strip()
-    mob = str(row.get("Promoter Mobile Number", "") or "").strip()
+    mob = _safe_str(row.get("Promoter Mobile Number", ""))
     bits = [b for b in [name, city, mob] if b]
     return " | ".join(bits) if bits else str(row.get("__hash", "") or "")
 
@@ -2817,7 +2841,7 @@ def _paginate_df(df: pd.DataFrame, page: int, page_size: int) -> tuple[pd.DataFr
 def _lead_label(row: pd.Series) -> str:
     name = str(row.get("Property Name", "") or "").strip()
     city = str(row.get("City", "") or "").strip()
-    mob = str(row.get("Promoter Mobile Number", "") or "").strip()
+    mob = _safe_str(row.get("Promoter Mobile Number", ""))
     bits = [b for b in [name, city, mob] if b]
     return " | ".join(bits) if bits else str(row.get("__hash", "") or "")
 
@@ -4330,6 +4354,8 @@ def render_lead_contact_cards(
     role: str = "",
 ):
     """Card-style view for quick calling. UI-only; update_fn can be plugged in."""
+    def _s(v):
+        return _safe_str(v)
     if df is None or len(df) == 0:
         empty_state("No matches", "Try clearing filters or search with fewer keywords.", kind="info")
         return
@@ -4345,15 +4371,15 @@ def render_lead_contact_cards(
         pid = str(r.get("__hash") or r.get("record_hash") or "")
         pcode = pid_to_code.get(pid, pid[:6].upper() if pid else "—")
 
-        prop = (r.get("Property Name") or "").strip()
-        addr = (r.get("Property Address") or "").strip()
-        dist = (r.get("District") or "").strip()
-        city = (r.get("City") or "").strip()
+        prop = _s(r.get("Property Name"))
+        addr = _s(r.get("Property Address"))
+        dist = _s(r.get("District"))
+        city = _s(r.get("City"))
 
-        promoter = (r.get("Promoter / Developer Name") or "").strip()
-        email = (r.get("Promoter Email") or "").strip()
-        mobile = (r.get("Promoter Mobile Number") or "").strip()
-        status = (r.get("status") or "New").strip()
+        promoter = _s(r.get("Promoter / Developer Name"))
+        email = _s(r.get("Promoter Email"))
+        mobile = _s(r.get("Promoter Mobile Number"))
+        status = (_s(r.get("status")) or "New")
 
         st.markdown("<div class='card-tight'>", unsafe_allow_html=True)
         st.markdown(f"**🏢 {pcode} — {prop or 'Property'}**")
