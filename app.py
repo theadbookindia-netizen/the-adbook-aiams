@@ -4568,6 +4568,9 @@ with st.sidebar:
     menu = MENU_INSTALL if SECTION == SECTION_INSTALL else MENU_ADS
     if (ROLE == ROLE_SUPER_ADMIN) or (ADMIN_HEAD_ENABLED and ROLE == ROLE_MARKETING_HEAD):
         menu = menu + ["Admin Panel"]
+    # UI-only: Dedicated Contacts page for quick calling/workflow
+    if "📇 Contacts" not in menu:
+        menu = menu + ["📇 Contacts"]
 
     st.markdown("### 🔎 Global Search")
     gq = st.text_input(
@@ -7188,6 +7191,51 @@ def safe_first_row_dict(df: pd.DataFrame) -> dict:
 if PAGE_KEY == "Admin Panel":
     require_module_access(SECTION)  # scope check
     page_admin_panel()
+    st.stop()
+
+
+if PAGE_KEY == "Contacts":
+    page_title("📇 Contacts", f"{SECTION}: Search & call/WhatsApp/email leads faster")
+
+    st.markdown('<div class="sticky-wrap">', unsafe_allow_html=True)
+    df_filtered = render_search_panel_leads(leads_df, key_prefix="contacts", title="🔎 District → City → Property (Contacts)")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    view_mode = st.radio("View", ["Cards (Contacts)", "Table"], horizontal=True, index=0, key="contacts_view_mode")
+
+    if not st.session_state.get("contacts_searched"):
+        st.info("Use the search panel above and click **Search** to view contacts.")
+    else:
+        if view_mode.startswith("Cards"):
+            allow_updates = bool(can(SECTION, "write", ROLE))
+            update_fn = None
+            if "upsert_lead_update" in globals():
+                def _upd(pid, status="New", notes="", follow_up="", last_call_outcome=None):
+                    try:
+                        upsert_lead_update(SECTION, pid, status=status, notes=notes, follow_up=follow_up, last_call_outcome=last_call_outcome)
+                    except TypeError:
+                        upsert_lead_update(pid, status=status, notes=notes, follow_up=follow_up, last_call_outcome=last_call_outcome)
+                update_fn = _upd
+
+            render_lead_contact_cards(
+                df_filtered,
+                pid_to_code=pid_to_code,
+                max_cards=60,
+                allow_updates=allow_updates and (update_fn is not None),
+                update_fn=update_fn,
+                user=USER,
+                role=ROLE,
+            )
+        else:
+            dfv = df_filtered.copy()
+            render_table_pro(
+                dfv,
+                title="Contacts (table)",
+                hide_cols=infer_internal_cols(dfv),
+                date_cols=[c for c in ["follow_up", "last_updated", "created_at", "updated_at"] if c in dfv.columns],
+                status_col="status" if "status" in dfv.columns else None,
+                page_size_default=50,
+            )
     st.stop()
 
 
