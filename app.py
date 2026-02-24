@@ -834,6 +834,32 @@ def _lead_label(row: pd.Series) -> str:
     bits = [b for b in [name, city, mob] if b]
     return " | ".join(bits) if bits else str(row.get("__hash", "") or "")
 
+def _lp_label(row: pd.Series | dict, pid_to_code: dict | None = None) -> str:
+    """Human-friendly label used by Leads Pipeline pickers (keeps existing __hash IDs)."""
+    try:
+        pid = str(row.get("__hash", "") or "")
+    except Exception:
+        pid = ""
+
+    code = ""
+    if isinstance(pid_to_code, dict) and pid and pid in pid_to_code:
+        code = str(pid_to_code.get(pid) or "").strip()
+
+    def g(k: str) -> str:
+        try:
+            return str(row.get(k, "") or "").strip()
+        except Exception:
+            return ""
+
+    name = g("Property Name")
+    city = g("City")
+    district = g("District")
+    mob = _safe_str(g("Promoter Mobile Number"))
+
+    bits = [b for b in [code, name, city or district, mob] if b]
+    return " | ".join(bits) if bits else (pid or name or "Lead")
+
+
 def _cards_view(df: pd.DataFrame, id_col="__hash"):
     if df is None or len(df) == 0:
         st.info("No results. Try clearing filters.")
@@ -4506,36 +4532,24 @@ bootstrap_if_no_users()
 
 
 def require_auth():
-    """Require authentication and stop the script until login succeeds."""
-    if "auth" in st.session_state and st.session_state.get("auth"):
+    """Render login UI only when user is NOT authenticated."""
+    if st.session_state.get("auth"):
         return
 
-    # --- Login UI (sidebar) ---
     with st.sidebar:
         st.markdown("### 🔐 Login")
-        u = (st.text_input("Username", key="login_username") or "").strip()
-        p = st.text_input("Password", type="password", key="login_password")
-
+        u = st.text_input("Username", key="login_user").strip()
+        p = st.text_input("Password", type="password", key="login_pass")
         if st.button("Login", type="primary", key="login_btn"):
             row = get_user(u)
             if row and int(row.get("is_active", 0) or 0) == 1 and pbkdf2_verify(p, row["password_hash"]):
-                st.session_state["auth"] = {
-                    "user": row["username"],
-                    "role": row["role"],
-                    "scope": row.get("section_scope", SCOPE_BOTH),
-                }
+                st.session_state["auth"] = {"user": row["username"], "role": row["role"], "scope": row["section_scope"]}
                 set_last_login(row["username"])
-                audit(
-                    row["username"],
-                    "LOGIN",
-                    f"role={row['role']} scope={row.get('section_scope', SCOPE_BOTH)}",
-                )
+                audit(row["username"], "LOGIN", f"role={row['role']} scope={row['section_scope']}")
                 st.rerun()
-
             st.error("Invalid credentials or disabled account.")
-
-    # Stop the rest of the app until login succeeds.
     st.stop()
+
 def page_required_action(page_key: str) -> str:
     """Return minimum permission action required to show a page in menu (UI-only)."""
     k = (page_key or "").strip()
