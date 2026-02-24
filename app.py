@@ -813,6 +813,11 @@ def _apply_leads_filters(df_in: pd.DataFrame, f: dict) -> pd.DataFrame:
 
     return df
 
+
+def _lp_apply_filters(df_in: pd.DataFrame, f: dict) -> pd.DataFrame:
+    """Backward-compatible alias: some UI blocks call _lp_apply_filters."""
+    return _apply_leads_filters(df_in, f)
+
 def _paginate_df(df: pd.DataFrame, page: int, page_size: int) -> tuple[pd.DataFrame, int]:
     page_size = max(25, int(page_size or 200))
     total = int(len(df))
