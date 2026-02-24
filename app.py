@@ -2265,20 +2265,8 @@ if logo_b64:
 else:
     logo_html = "<div style='width:44px;height:44px;border-radius:10px;background:rgba(15,91,102,.08);border:1px solid #e6e8ef;'></div>"
 
-st.markdown(
-    f"""
-<div class="brandbar">
-  {logo_html}
-  <div>
-    <div class="title">The Adbook AIAMS</div>
-    <div class="sub">Inventory • Agreements • WhatsApp • Proposals • Reports</div>
-  </div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
 
-
+# (UI cleanup) Duplicate brandbar removed
 # =========================================================
 # DATABASE (SUPABASE) - STABLE (IPv4) + FAST FAIL + PERF
 # =========================================================
@@ -4296,33 +4284,76 @@ def _distinct_nonblank(series: pd.Series):
     out = sorted({v.strip() for v in vals if str(v).strip()})
     return out
 
-def render_search_panel_leads(leads_df: pd.DataFrame, *, key_prefix: str = "home", title: str = "🔎 District → City → Property (Search & Call)"):
-    """UI-only search panel. Returns filtered dataframe."""
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
+
+def render_search_panel_leads(
+    leads_df: pd.DataFrame,
+    *,
+    key_prefix: str = "home",
+    title: str = "🔎 District → City → Property (Search & Call)",
+):
+    """UI-only search panel. Returns filtered dataframe.
+
+    Fixes:
+    - Proper button UX (Search on right, Clear on left)
+    - Enter key triggers Search (form submit)
+    - Consistent session_state flags used by pages (home_searched / contacts_searched)
+    """
+    st.markdown("<div class='card search-card'>", unsafe_allow_html=True)
     st.markdown(f"<div class='section-title'>{title}</div>", unsafe_allow_html=True)
     st.caption("Tip: Select District/City for fast narrowing. Then search by property, promoter, phone or email.")
 
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        dists = _distinct_nonblank(leads_df.get("District", pd.Series([], dtype="object")))
-        sel_dist = st.selectbox("District", [""] + dists, index=0, key=f"{key_prefix}_dist")
-    with c2:
-        if sel_dist:
-            sub = leads_df[leads_df["District"].astype("string").fillna("") == sel_dist]
-            cities = _distinct_nonblank(sub.get("City", pd.Series([], dtype="object")))
-        else:
-            cities = []
-        sel_city = st.selectbox("City", [""] + cities, index=0, key=f"{key_prefix}_city")
+    # ---- local helpers
+    def _set_flag(prefix: str, val: bool = True):
+        st.session_state[f"{prefix}_searched"] = bool(val)
+        # Backward-compatible page flags used elsewhere
+        if prefix == "home":
+            st.session_state["home_searched"] = bool(val)
+        if prefix == "contacts":
+            st.session_state["contacts_searched"] = bool(val)
 
-    q = st.text_input(
-        "Search Property / Society / Promoter / Phone / Email",
-        value=st.session_state.get(f"{key_prefix}_q", ""),
-        placeholder="type to search…",
-        key=f"{key_prefix}_q",
-    )
+    def _clear(prefix: str):
+        for k in [f"{prefix}_dist", f"{prefix}_city", f"{prefix}_q"]:
+            if k in st.session_state:
+                st.session_state[k] = ""
+        for k in [f"{prefix}_searched", "home_searched", "contacts_searched"]:
+            if prefix == "home" and k == "home_searched":
+                st.session_state[k] = False
+            if prefix == "contacts" and k == "contacts_searched":
+                st.session_state[k] = False
+            if k == f"{prefix}_searched":
+                st.session_state[k] = False
 
-    go = st.button("🔎 Search", type="primary", use_container_width=True, key=f"{key_prefix}_go")
-    st.markdown("</div>", unsafe_allow_html=True)
+    # ---- form (Enter triggers Search)
+    with st.form(key=f"{key_prefix}_search_form", clear_on_submit=False):
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            dists = _distinct_nonblank(leads_df.get("District", pd.Series([], dtype="object")))
+            sel_dist = st.selectbox("District", [""] + dists, index=0, key=f"{key_prefix}_dist")
+        with c2:
+            if sel_dist:
+                sub = leads_df[leads_df["District"].astype("string").fillna("") == sel_dist]
+                cities = _distinct_nonblank(sub.get("City", pd.Series([], dtype="object")))
+            else:
+                cities = []
+            sel_city = st.selectbox("City", [""] + cities, index=0, key=f"{key_prefix}_city")
+
+        q = st.text_input(
+            "Search Property / Society / Promoter / Phone / Email",
+            value=st.session_state.get(f"{key_prefix}_q", ""),
+            placeholder="Type and press Enter…",
+            key=f"{key_prefix}_q",
+        )
+
+        bL, bR = st.columns([1, 1])
+        with bL:
+            clear_now = st.form_submit_button("🧹 Clear", use_container_width=True)
+        with bR:
+            # Primary button on the right (UX standard)
+            go = st.form_submit_button("🔎 Search", type="primary", use_container_width=True)
+
+    if clear_now:
+        _clear(key_prefix)
+        st.rerun()
 
     # Filtering (fast local)
     df = leads_df.copy()
@@ -4331,20 +4362,36 @@ def render_search_panel_leads(leads_df: pd.DataFrame, *, key_prefix: str = "home
     if sel_city:
         df = df[df["City"].astype("string").fillna("") == sel_city]
 
-    if (go or st.session_state.get(f"{key_prefix}_searched")) and q.strip():
-        st.session_state[f"{key_prefix}_searched"] = True
+    # When user hits Search (or already searched), apply query filter
+    searched = bool(go or st.session_state.get(f"{key_prefix}_searched", False))
+    if searched:
+        _set_flag(key_prefix, True)
+
+    if searched and q.strip():
         s = q.strip().lower()
         if "__search" in df.columns:
             df = df[df["__search"].astype("string").fillna("").str.contains(re.escape(s), na=False)]
         else:
-            cols = [c for c in ["Property Name","Property Address","Promoter / Developer Name","Promoter Email","Promoter Mobile Number","City","District"] if c in df.columns]
+            cols = [
+                c
+                for c in [
+                    "Property Name",
+                    "Property Address",
+                    "Promoter / Developer Name",
+                    "Promoter Email",
+                    "Promoter Mobile Number",
+                    "City",
+                    "District",
+                ]
+                if c in df.columns
+            ]
             mask = pd.Series(False, index=df.index)
             for c in cols:
                 mask |= df[c].astype("string").fillna("").str.lower().str.contains(re.escape(s), na=False)
             df = df[mask]
-    elif go or st.session_state.get(f"{key_prefix}_searched"):
-        st.session_state[f"{key_prefix}_searched"] = True
 
+    st.markdown(f"<span class='badge badge-strong'>Matches: {len(df):,}</span>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
     return df
 
 
@@ -4563,8 +4610,9 @@ MENU_ADS = [
 ]
 
 with st.sidebar:
+    # Sidebar brand (kept compact to avoid duplicate-logo feel)
     if Path(LOGO_PATH).exists():
-        st.image(LOGO_PATH, use_column_width=True)
+        st.image(LOGO_PATH, width=170)
 
     st.markdown("### The Adbook AIAMS")
     st.caption("Outdoor Media Operations System")
