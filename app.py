@@ -4256,6 +4256,140 @@ def action_bar(left_buttons: list[tuple[str, str]], right_buttons: list[tuple[st
     st.markdown("</div>", unsafe_allow_html=True)
     return clicked
 
+# =========================================================
+# HOME SEARCH + CONTACT CARDS (UI-ONLY)
+# =========================================================
+def _distinct_nonblank(series: pd.Series):
+    try:
+        vals = series.astype("string").fillna("").tolist()
+    except Exception:
+        vals = [str(x or "") for x in series.tolist()]
+    out = sorted({v.strip() for v in vals if str(v).strip()})
+    return out
+
+def render_search_panel_leads(leads_df: pd.DataFrame, *, key_prefix: str = "home", title: str = "🔎 District → City → Property (Search & Call)"):
+    """UI-only search panel. Returns filtered dataframe."""
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown(f"<div class='section-title'>{title}</div>", unsafe_allow_html=True)
+    st.caption("Tip: Select District/City for fast narrowing. Then search by property, promoter, phone or email.")
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        dists = _distinct_nonblank(leads_df.get("District", pd.Series([], dtype="object")))
+        sel_dist = st.selectbox("District", [""] + dists, index=0, key=f"{key_prefix}_dist")
+    with c2:
+        if sel_dist:
+            sub = leads_df[leads_df["District"].astype("string").fillna("") == sel_dist]
+            cities = _distinct_nonblank(sub.get("City", pd.Series([], dtype="object")))
+        else:
+            cities = []
+        sel_city = st.selectbox("City", [""] + cities, index=0, key=f"{key_prefix}_city")
+
+    q = st.text_input(
+        "Search Property / Society / Promoter / Phone / Email",
+        value=st.session_state.get(f"{key_prefix}_q", ""),
+        placeholder="type to search…",
+        key=f"{key_prefix}_q",
+    )
+
+    go = st.button("🔎 Search", type="primary", use_container_width=True, key=f"{key_prefix}_go")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Filtering (fast local)
+    df = leads_df.copy()
+    if sel_dist:
+        df = df[df["District"].astype("string").fillna("") == sel_dist]
+    if sel_city:
+        df = df[df["City"].astype("string").fillna("") == sel_city]
+
+    if (go or st.session_state.get(f"{key_prefix}_searched")) and q.strip():
+        st.session_state[f"{key_prefix}_searched"] = True
+        s = q.strip().lower()
+        if "__search" in df.columns:
+            df = df[df["__search"].astype("string").fillna("").str.contains(re.escape(s), na=False)]
+        else:
+            cols = [c for c in ["Property Name","Property Address","Promoter / Developer Name","Promoter Email","Promoter Mobile Number","City","District"] if c in df.columns]
+            mask = pd.Series(False, index=df.index)
+            for c in cols:
+                mask |= df[c].astype("string").fillna("").str.lower().str.contains(re.escape(s), na=False)
+            df = df[mask]
+    elif go or st.session_state.get(f"{key_prefix}_searched"):
+        st.session_state[f"{key_prefix}_searched"] = True
+
+    return df
+
+
+def render_lead_contact_cards(
+    df: pd.DataFrame,
+    *,
+    pid_to_code: dict,
+    max_cards: int = 40,
+    allow_updates: bool = False,
+    update_fn=None,
+    user: str = "",
+    role: str = "",
+):
+    """Card-style view for quick calling. UI-only; update_fn can be plugged in."""
+    if df is None or len(df) == 0:
+        empty_state("No matches", "Try clearing filters or search with fewer keywords.", kind="info")
+        return
+
+    st.markdown(
+        f"<span class='badge badge-strong'>Matches: {len(df):,}</span>"
+        f"<span class='badge'>Showing: {min(len(df), max_cards):,}</span>",
+        unsafe_allow_html=True,
+    )
+
+    show = df.head(max_cards).to_dict("records")
+    for r in show:
+        pid = str(r.get("__hash") or r.get("record_hash") or "")
+        pcode = pid_to_code.get(pid, pid[:6].upper() if pid else "—")
+
+        prop = (r.get("Property Name") or "").strip()
+        addr = (r.get("Property Address") or "").strip()
+        dist = (r.get("District") or "").strip()
+        city = (r.get("City") or "").strip()
+
+        promoter = (r.get("Promoter / Developer Name") or "").strip()
+        email = (r.get("Promoter Email") or "").strip()
+        mobile = (r.get("Promoter Mobile Number") or "").strip()
+        status = (r.get("status") or "New").strip()
+
+        st.markdown("<div class='card-tight'>", unsafe_allow_html=True)
+        st.markdown(f"**🏢 {pcode} — {prop or 'Property'}**")
+        badge_html = "".join([f"<span class='badge badge-strong'>{b}</span>" for b in [dist, city] if b]) + f"<span class='badge'>{status}</span>"
+        st.markdown(badge_html, unsafe_allow_html=True)
+
+        st.markdown(f"📍 {addr}" if addr else "📍 -")
+        st.markdown(f"👤 **{promoter or 'Promoter/Society'}**")
+        st.markdown(f"📞 **{mobile or '-'}** &nbsp;&nbsp; ✉️ **{email or '-'}**")
+
+        b1, b2, b3, b4 = st.columns(4)
+        with b1:
+            st.link_button("📞 Call", tel_url(mobile), use_container_width=True, disabled=not bool(normalize_mobile(mobile)))
+        with b2:
+            msg = f"Hello, this is The Adbook Outdoor. We want to discuss advertising / screen installation for {prop} in {city}, {dist}."
+            st.link_button("💬 WhatsApp", whatsapp_url(mobile, msg), use_container_width=True, disabled=not bool(normalize_mobile(mobile)))
+        with b3:
+            st.link_button("✉️ Email", mailto_url(email, subject="Advertising / Screen Installation", body=f"Hello,\n\nWe want to discuss advertising / screen installation at {prop}, {addr}.\n\nRegards,\nThe Adbook Outdoor"),
+                           use_container_width=True, disabled=not bool(email))
+        with b4:
+            st.link_button("📍 Maps", google_maps_url(prop, addr), use_container_width=True, disabled=not bool(prop or addr))
+
+        # Optional inline update (kept minimal to avoid breaking logic)
+        if allow_updates and callable(update_fn) and pid:
+            with st.expander("✍ Quick Update", expanded=False):
+                oc = st.selectbox("Outcome", ["", "Interested", "Follow-up", "Not Reachable", "Rejected"], index=0, key=f"oc_{pid}")
+                fu = st.date_input("Next follow-up", value=None, key=f"fu_{pid}")
+                notes = st.text_area("Notes", value=str(r.get("notes") or ""), height=60, key=f"note_{pid}")
+                if st.button("✅ Save Update", type="primary", key=f"save_{pid}"):
+                    update_fn(pid, status=status, notes=notes, follow_up=str(fu) if fu else "", last_call_outcome=oc if oc else None)
+                    st.success("Saved.")
+                    st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.write("")
+
 
 def kpi(label, value):
     st.markdown(
@@ -7056,24 +7190,28 @@ if PAGE_KEY == "Admin Panel":
     page_admin_panel()
     st.stop()
 
-if PAGE_KEY == "Home":
-    page_title("🏠 Home (Fast Search)", f"{SECTION}: Search properties quickly (optimized).")
 
+if PAGE_KEY == "Home":
+    page_title("🏠 Home (Search & Call)", f"{SECTION}: Fast search with contact actions")
+
+    # ---------------------------
+    # Optional global search (across modules)
+    # ---------------------------
     gq = st.session_state.get("global_search_term", "").strip()
     if gq:
         st.markdown("### 🔎 Global Search Results")
         res = global_search(gq)
         any_hit = False
-        for mod, df in res.items():
-            if df is None or len(df) == 0:
+        for mod, dfm in res.items():
+            if dfm is None or len(dfm) == 0:
                 continue
             any_hit = True
-            with st.expander(f"{mod} — {len(df)} results", expanded=False):
-                render_table_pro(df, title=mod, hide_cols=infer_internal_cols(df), page_size_default=25)
+            with st.expander(f"{mod} — {len(dfm)} results", expanded=False):
+                render_table_pro(dfm, title=f"{mod} (global)", hide_cols=infer_internal_cols(dfm), page_size_default=25)
                 if can(SECTION, "export", ROLE):
                     st.download_button(
                         f"⬇ Export {mod} (CSV)",
-                        data=df_to_csv_bytes(df),
+                        data=df_to_csv_bytes(dfm),
                         file_name=f"{mod.replace(' ','_').lower()}_search.csv",
                         mime="text/csv",
                     )
@@ -7081,28 +7219,62 @@ if PAGE_KEY == "Home":
             st.info("No results found in database modules for this search.")
         st.markdown("---")
 
-    q = st.text_input("Search (Property / Promoter / Phone / Email)", placeholder="Type and press Enter…")
-    df = leads_df
+    # ---------------------------
+    # Local search panel (District -> City -> Query)
+    # ---------------------------
+    st.markdown('<div class="sticky-wrap">', unsafe_allow_html=True)
+    df_filtered = render_search_panel_leads(leads_df, key_prefix="home", title="🔎 District → City → Property (Search & Call)")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    if q.strip():
-        s = q.strip().lower()
-        df = df[df["__search"].str.contains(re.escape(s), na=False)]
+    view_mode = st.radio("View", ["Cards (Contacts)", "Table"], horizontal=True, index=0, key="home_view_mode")
 
-    st.markdown(f"<span class='badge badge-strong'>Matches: {len(df):,}</span>", unsafe_allow_html=True)
+    if not st.session_state.get("home_searched"):
+        st.info("Use the search panel above and click **Search**. You can then call/WhatsApp/email directly from results.")
+    else:
+        if view_mode.startswith("Cards"):
+            # Contact-first UI for calling
+            allow_updates = bool(can(SECTION, "write", ROLE))
+            # plug-in update function only if your code has it
+            update_fn = None
+            if "upsert_lead_update" in globals():
+                def _upd(pid, status="New", notes="", follow_up="", last_call_outcome=None):
+                    # keep existing upsert signature if present
+                    try:
+                        upsert_lead_update(SECTION, pid, status=status, notes=notes, follow_up=follow_up, last_call_outcome=last_call_outcome)
+                    except TypeError:
+                        # fallback older signature
+                        upsert_lead_update(pid, status=status, notes=notes, follow_up=follow_up, last_call_outcome=last_call_outcome)
 
-    page_size = st.selectbox("Rows per page", [25, 50, 100, 200, 500], index=2)
-    total_pages = max(1, (len(df) + page_size - 1) // page_size)
-    page_no = st.number_input("Page", min_value=1, max_value=total_pages, value=1, step=1)
+                update_fn = _upd
 
-    start = (page_no - 1) * page_size
-    end = start + page_size
-
-    view_cols = ["District", "City", "Property Name", "Promoter / Developer Name",
-                 "Promoter Mobile Number", "Promoter Email", "status", "assigned_to", "follow_up"]
-    dfv = safe_df_cols(df, view_cols).iloc[start:end]
-    render_table_pro(dfv, title='Leads (page view)', hide_cols=infer_internal_cols(dfv), date_cols=['follow_up'], status_col='status', page_size_default=50)
+            render_lead_contact_cards(
+                df_filtered,
+                pid_to_code=pid_to_code,
+                max_cards=40,
+                allow_updates=allow_updates and (update_fn is not None),
+                update_fn=update_fn,
+                user=USER,
+                role=ROLE,
+            )
+        else:
+            # Table mode (pro table with built-in pagination/search)
+            view_cols = [
+                "District", "City", "Property Name", "Property Address",
+                "Promoter / Developer Name", "Promoter Mobile Number", "Promoter Email",
+                "status", "assigned_to", "follow_up",
+            ]
+            dfv = safe_df_cols(df_filtered, view_cols)
+            render_table_pro(
+                dfv,
+                title="Leads (Search Results)",
+                hide_cols=infer_internal_cols(dfv),
+                date_cols=[c for c in ["follow_up", "last_updated"] if c in dfv.columns],
+                status_col="status" if "status" in dfv.columns else None,
+                page_size_default=50,
+            )
 
 elif PAGE_KEY == "Management Dashboard":
+
     page_title("📈 Management Dashboard", "Executive KPIs, coverage, funnel, and revenue snapshot.")
 
     # KPIs from leads (CSV + lead_updates)
@@ -7516,6 +7688,16 @@ elif PAGE_KEY == "Leads Pipeline":
         if not pid:
             st.info("Open a lead in **Pipeline** or **Update Lead** to view Interactions, Tasks, and Status History.")
         else:
+            # Contact quick actions (Lead profile)
+            lead_row = leads_df[leads_df["__hash"].astype("string") == pid] if "__hash" in leads_df.columns else pd.DataFrame()
+            if lead_row is not None and len(lead_row):
+                r0 = lead_row.iloc[0].to_dict()
+                render_lead_contact_cards(
+                    pd.DataFrame([r0]),
+                    pid_to_code=pid_to_code,
+                    max_cards=1,
+                    allow_updates=False,
+                )
             st.markdown("---")
 
             # If tables are missing, show a friendly message (no crash)
