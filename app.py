@@ -4075,27 +4075,78 @@ def render_topbar(app_name: str, section: str, user: str, role_label: str, logo_
         # Optional: show logo above the topbar for brand presence
         st.image(logo_path, use_container_width=False, width=140)
 
-def grouped_menu(menu: list[str]):
-    """Group your existing `menu` list into sidebar sections (no logic changes)."""
-    groups = {
-        "Overview": [],
-        "Leads": [],
-        "Installation": [],
-        "Ads": [],
-        "System": [],
-    }
-    for item in menu:
-        k = re.sub(r"^[^A-Za-z0-9]+\s*", "", item).strip().lower()
-        if any(x in k for x in ["home", "dashboard", "report"]):
-            groups["Overview"].append(item)
-        elif any(x in k for x in ["lead", "pipeline"]):
-            groups["Leads"].append(item)
-        elif any(x in k for x in ["inventory", "screen", "document", "survey", "workorder", "installation"]):
-            groups["Installation"].append(item)
-        elif any(x in k for x in ["agreement", "campaign", "payment", "client", "advert"]):
-            groups["Ads"].append(item)
-        else:
-            groups["System"].append(item)
+def grouped_menu(menu: list[str], section: str | None = None) -> list[tuple[str, list[str]]]:
+    """
+    Group menu items into sidebar sections, respecting the active module.
+    section: SECTION_INSTALL or SECTION_ADS (or None for auto-detect)
+    """
+    is_install = (section or "").strip().lower() != "advertisement"
+
+    if is_install:
+        groups = {
+            "📍 Overview":            [],
+            "🎯 Lead Generation":     [],
+            "📋 Site Qualification":  [],
+            "⚙️ Execution":            [],
+            "📄 Legal & Finance":      [],
+            "🔧 Operations":           [],
+            "📦 Assets & Docs":        [],
+            "📊 Reports":              [],
+            "⚙ System":               [],
+        }
+        for item in menu:
+            k = re.sub(r"^[^A-Za-z0-9]+\s*", "", item).strip().lower()
+            if any(x in k for x in ["home", "map"]):
+                groups["📍 Overview"].append(item)
+            elif any(x in k for x in ["lead", "pipeline"]):
+                groups["🎯 Lead Generation"].append(item)
+            elif any(x in k for x in ["survey"]):
+                groups["📋 Site Qualification"].append(item)
+            elif any(x in k for x in ["milestone", "workorder"]):
+                groups["⚙️ Execution"].append(item)
+            elif any(x in k for x in ["agreement", "rent", "payment"]):
+                groups["📄 Legal & Finance"].append(item)
+            elif any(x in k for x in ["maintenance", "ticket", "service"]):
+                groups["🔧 Operations"].append(item)
+            elif any(x in k for x in ["asset", "inventory", "screen", "document", "whatsapp"]):
+                groups["📦 Assets & Docs"].append(item)
+            elif any(x in k for x in ["report"]):
+                groups["📊 Reports"].append(item)
+            else:
+                groups["⚙ System"].append(item)
+    else:
+        groups = {
+            "📍 Overview":         [],
+            "🎯 Lead Generation":  [],
+            "💼 Commercial":       [],
+            "⚙️ Execution":         [],
+            "📄 Legal & Finance":   [],
+            "📅 Scheduling":        [],
+            "📊 Reports & Docs":    [],
+            "💬 Support":           [],
+            "⚙ System":            [],
+        }
+        for item in menu:
+            k = re.sub(r"^[^A-Za-z0-9]+\s*", "", item).strip().lower()
+            if any(x in k for x in ["home", "map"]):
+                groups["📍 Overview"].append(item)
+            elif any(x in k for x in ["lead", "pipeline"]):
+                groups["🎯 Lead Generation"].append(item)
+            elif any(x in k for x in ["proposal", "quotation"]):
+                groups["💼 Commercial"].append(item)
+            elif any(x in k for x in ["milestone"]):
+                groups["⚙️ Execution"].append(item)
+            elif any(x in k for x in ["agreement", "payment", "invoice"]):
+                groups["📄 Legal & Finance"].append(item)
+            elif any(x in k for x in ["schedule", "display"]):
+                groups["📅 Scheduling"].append(item)
+            elif any(x in k for x in ["report", "document", "whatsapp"]):
+                groups["📊 Reports & Docs"].append(item)
+            elif any(x in k for x in ["ticket", "support"]):
+                groups["💬 Support"].append(item)
+            else:
+                groups["⚙ System"].append(item)
+
     return [(g, items) for g, items in groups.items() if items]
 
 def sidebar_nav(menu: list[str], default_page: str | None = None) -> str:
@@ -4108,7 +4159,7 @@ def sidebar_nav(menu: list[str], default_page: str | None = None) -> str:
     selected = st.session_state["nav_page"]
 
     st.markdown("### 📍 Navigation")
-    for group, items in grouped_menu(menu):
+    for group, items in grouped_menu(menu, section=SECTION):
         st.markdown(f"<div class='nav-group'>{group}</div>", unsafe_allow_html=True)
         for it in items:
             # Use Streamlit buttons for reliable rerun + state
@@ -4508,39 +4559,7 @@ bootstrap_if_no_users()
 def require_auth():
     if "auth" in st.session_state:
         return
-    
-def page_required_action(page_key: str) -> str:
-    """Return minimum permission action required to show a page in menu (UI-only)."""
-    k = (page_key or "").strip()
-    if k in ["Admin Panel"]:
-        return "view"
-    if k in ["Reports"]:
-        return "export"
-    return "view"
-
-def build_menu_for(section: str, role: str) -> list[str]:
-    """Filter module menu so users only see pages they can access (UI-only)."""
-    base = MENU_INSTALL if section == SECTION_INSTALL else MENU_ADS
-    out: list[str] = []
-    for label in base:
-        page_key = re.sub(r"^[^A-Za-z0-9]+\s*", "", label).strip()
-        req = page_required_action(page_key)
-        # Special case: Property 360 should only appear for Installation
-        if page_key == "Property 360 (Install)" and section != SECTION_INSTALL:
-            continue
-        # Hide pages the role can't access
-        if can(section, req, role):
-            out.append(label)
-    # Admin Panel (already filtered by can(admin)) — also keep your existing head toggle
-    if (role == ROLE_SUPER_ADMIN) or (ADMIN_HEAD_ENABLED and role == ROLE_MARKETING_HEAD):
-        if "Admin Panel" not in [re.sub(r"^[^A-Za-z0-9]+\s*", "", x).strip() for x in out] :
-            out.append("🛡 Admin Panel")
-    # Dedicated Contacts always available if user can view
-    if can(section, "view", role) and "📇 Contacts" not in out:
-        out.append("📇 Contacts")
-    return out
-
-with st.sidebar:
+    with st.sidebar:
         st.markdown("### 🔐 Login")
         u = st.text_input("Username").strip()
         p = st.text_input("Password", type="password")
@@ -4627,44 +4646,82 @@ def require_module_access(section: str):
 # =========================================================
 # SIDEBAR + MENU (Original Layout Preserved)
 # =========================================================
-# ---------------------------------------------------------
-# MODULE-WISE MENUS (UI-only)
-# - Keep keys matching existing PAGE_KEY handlers/routes
-# - Order aligns to operational flow (Installation vs Advertisements)
-# ---------------------------------------------------------
+# MODULE-1: Installation — full business flow from Lead to Maintenance
 MENU_INSTALL = [
-    "🏠 Home",
-    "📈 Management Dashboard",
-    "🗺 Map View",
-    "🧩 Leads Pipeline",
-    "🧩 Property 360 (Install)",
-    "🗂 Inventory (Sites)",
-    "📺 Screens",
-    "📝 Agreements",
-    "💰 Billing & Reminders",
-    "🛠 Service Center",
-    "⏰ Tasks & Alerts",
-    "📄 Documents Vault",
-    "📊 Reports",
-    "💬 WhatsApp",
+    # ── OVERVIEW ──────────────────────────────────────────────
+    "🏠 Home",                       # Dashboard + KPIs (Installation)
+    "🗺 Map View",                    # Site map with installation status
+
+    # ── LEAD GENERATION ───────────────────────────────────────
+    "🧩 Leads Pipeline",              # Lead list + Lead 360 (Pipeline / Update / 360 tabs)
+
+    # ── SITE QUALIFICATION ────────────────────────────────────
+    "📐 Surveys",                     # Survey scheduling + feasibility
+
+    # ── EXECUTION ─────────────────────────────────────────────
+    "🏗 Milestones / Pipeline",       # Workorder + Milestones tracker (per site)
+
+    # ── LEGAL & COMMERCIAL ────────────────────────────────────
+    "📝 Agreements",                  # Society / Property agreements
+    "📅 Rent Schedule",               # Rent payment calendar per agreement
+
+    # ── FINANCE ───────────────────────────────────────────────
+    "💰 Payments",                    # Rent payments + receipts
+
+    # ── OPERATIONS ────────────────────────────────────────────
+    "🛠 Maintenance",                 # Scheduled + ad-hoc screen maintenance
+    "🎫 Tickets",                     # Issue/fault tickets (field team)
+
+    # ── ASSETS ────────────────────────────────────────────────
+    "📦 Assets / Inventory",          # Screens + hardware inventory (per site)
+
+    # ── DOCUMENTS ─────────────────────────────────────────────
+    "📄 Documents Vault",             # NOC, permission letters, photos
+
+    # ── COMMUNICATION ─────────────────────────────────────────
+    "💬 WhatsApp",                    # Click-to-chat (society / promoter)
+
+    # ── REPORTING ─────────────────────────────────────────────
+    "📊 Reports",                     # Installation performance + revenue reports
 ]
 
+# MODULE-2: Advertisement — full business flow from Lead to Client Reporting
 MENU_ADS = [
-    "🏠 Home",
-    "📈 Management Dashboard",
-    "🗺 Map View",
-    "🧩 Leads Pipeline",
-    "💼 Ads Opportunities",
-    "📝 Proposals",
-    "📢 Ad Sales Inventory",
-    "📝 Agreements",
-    "💰 Billing & Reminders",
-    "📊 Reports",
-    "💬 WhatsApp",
-    # Assets/Inventory (read-only in Ads module) — page enforces access via can()
-    "🗂 Inventory (Sites)",
-    "📺 Screens",
+    # ── OVERVIEW ──────────────────────────────────────────────
+    "🏠 Home",                           # Dashboard + KPIs (Advertisement)
+    "🗺 Map View",                        # Site map with availability/occupancy
+
+    # ── LEAD GENERATION ───────────────────────────────────────
+    "🧩 Leads Pipeline",                  # Advertiser leads + Lead 360
+
+    # ── COMMERCIAL ────────────────────────────────────────────
+    "📃 Proposal / Quotation",            # Client proposals + quotation builder
+
+    # ── EXECUTION ─────────────────────────────────────────────
+    "🏗 Milestones / Pipeline",           # Campaign confirmation pipeline
+
+    # ── LEGAL ─────────────────────────────────────────────────
+    "📝 Agreements",                      # Client ad agreements / MSA
+
+    # ── SCHEDULING ────────────────────────────────────────────
+    "📅 Ad Display Schedule",             # Campaign → Screen slot schedule
+
+    # ── FINANCE ───────────────────────────────────────────────
+    "💰 Payments / Invoice",              # Payment tracking + invoice generation
+
+    # ── REPORTING ─────────────────────────────────────────────
+    "📊 Client Reports",                  # Client-wise payment + campaign reports
+
+    # ── SUPPORT ───────────────────────────────────────────────
+    "🎫 Tickets",                         # Advertiser / display issues
+
+    # ── DOCUMENTS ─────────────────────────────────────────────
+    "📄 Documents Vault",                 # Campaign creatives + contracts
+
+    # ── COMMUNICATION ─────────────────────────────────────────
+    "💬 WhatsApp",                        # Click-to-chat (clients / advertisers)
 ]
+
 with st.sidebar:
     # Sidebar brand (kept compact to avoid duplicate-logo feel)
     if Path(LOGO_PATH).exists():
@@ -4674,13 +4731,32 @@ with st.sidebar:
     st.caption("Outdoor Media Operations System")
     st.markdown("---")
 
-    st.markdown("**Quick Instructions**")
-    st.caption(
-        "• Use Home for fast search\n"
-        "• Use Leads to update status\n"
-        "• Use Inventory/Screens/Documents for Installation\n"
-        "• Use WhatsApp for click-to-chat"
-    )
+    st.markdown("**Quick Navigation**")
+    if SECTION == SECTION_INSTALL:
+        st.caption(
+            "1️⃣ Home → KPIs & Overview\n"
+            "2️⃣ Leads Pipeline → Qualify leads\n"
+            "3️⃣ Surveys → Site feasibility\n"
+            "4️⃣ Milestones → Track install progress\n"
+            "5️⃣ Agreements → Sign & store\n"
+            "6️⃣ Rent Schedule → Payment calendar\n"
+            "7️⃣ Payments → Record receipts\n"
+            "8️⃣ Maintenance → Screen health\n"
+            "9️⃣ Tickets → Field issues\n"
+            "🔟 Assets / Inventory → Screen list"
+        )
+    else:
+        st.caption(
+            "1️⃣ Home → KPIs & Overview\n"
+            "2️⃣ Leads Pipeline → Advertiser leads\n"
+            "3️⃣ Proposal / Quotation → Pitch clients\n"
+            "4️⃣ Milestones → Campaign confirm\n"
+            "5️⃣ Agreements → Client MSA\n"
+            "6️⃣ Ad Display Schedule → Book slots\n"
+            "7️⃣ Payments / Invoice → Track collections\n"
+            "8️⃣ Client Reports → Revenue review\n"
+            "9️⃣ Tickets → Client/display issues"
+        )
     st.markdown("---")
 
     st.markdown("### AIAMS")
@@ -4696,29 +4772,16 @@ with st.sidebar:
             st.stop()
 
     allowed_sections = [SECTION_INSTALL, SECTION_ADS] if SCOPE == SCOPE_BOTH else [SCOPE]
-
-    # Role-based default module (UI-only)
-    _default_section = SECTION_INSTALL
-    if ROLE in [ROLE_ADS_MANAGER, ROLE_ADS_MARKETING, ROLE_ADS_FIELD, ROLE_VIEWER_ADS]:
-        _default_section = SECTION_ADS
-    if ROLE in [ROLE_INSTALLATION_MANAGER, ROLE_INSTALLATION_MARKETING, ROLE_INSTALLATION_FIELD, ROLE_VIEWER_INSTALLATION]:
-        _default_section = SECTION_INSTALL
-    if allowed_sections and _default_section not in allowed_sections:
-        _default_section = allowed_sections[0]
-
-    SECTION = st.radio(
-        "Module",
-        allowed_sections,
-        horizontal=True,
-        index=allowed_sections.index(_default_section) if _default_section in allowed_sections else 0,
-        format_func=lambda x: "Module-1: Installation" if x == SECTION_INSTALL else ("Module-2: Advertisements" if x == SECTION_ADS else str(x)),
-        key="sidebar_module",
-    )
+    SECTION = st.radio("Module", allowed_sections, horizontal=True)
 
     require_module_access(SECTION)
 
-    # Module-wise menu, filtered by role permissions (UI-only)
-    menu = build_menu_for(SECTION, ROLE)
+    menu = MENU_INSTALL if SECTION == SECTION_INSTALL else MENU_ADS
+    if (ROLE == ROLE_SUPER_ADMIN) or (ADMIN_HEAD_ENABLED and ROLE == ROLE_MARKETING_HEAD):
+        menu = menu + ["Admin Panel"]
+    # UI-only: Dedicated Contacts page for quick calling/workflow
+    if "📇 Contacts" not in menu:
+        menu = menu + ["📇 Contacts"]
 
     st.markdown("### 🔎 Global Search")
     gq = st.text_input(
@@ -7326,25 +7389,868 @@ def page_admin_panel():
                 rows.append(row)
         render_table_pro(pd.DataFrame(rows), title='Role Permissions', hide_cols=[], page_size_default=50)
 
-def render_page(page_key: str):
-    # Normalize the same way your code does (PAGE_KEY already normalized)
-    routes = {
-        "Home": page_home,
-        "Management Dashboard": page_management_dashboard,
-        "Leads Pipeline": page_leads_pipeline,
-        "Inventory (Sites)": page_inventory_sites,
-        "Screens": page_screens,
-        "Documents Vault": page_documents_vault,
-        "Map View": page_map_view,
-        "Proposals": page_proposals,
-        "WhatsApp": page_whatsapp,
-        "Reports": page_reports,
-        "Admin Panel": page_admin_panel,
-    }
 
+# =========================================================
+# MODULE-1 NEW PAGE FUNCTIONS (Installation)
+# =========================================================
+
+def page_surveys():
+    """Surveys page — Module-1 Installation only."""
+    require_module_access(SECTION_INSTALL)
+    page_title("📐 Surveys", "Schedule and track site feasibility surveys.")
+    if not can(SECTION, "view", ROLE):
+        st.error("Access denied.")
+        return
+
+    pid = str(st.session_state.get("active_property_id") or st.session_state.get("active_pid") or "").strip()
+
+    inv = qdf("SELECT property_id, property_code, property_name, city FROM inventory_sites ORDER BY property_name LIMIT 5000")
+    inv["property_id"] = inv["property_id"].fillna("").astype(str)
+    inv["__label"] = (
+        inv["property_code"].fillna("").astype(str) + " | " +
+        inv["property_name"].fillna("").astype(str) + " | " +
+        inv["city"].fillna("").astype(str)
+    ).str.strip(" |")
+    label_list = ["(Select Property)"] + inv["__label"].tolist()
+    label_to_pid = dict(zip(inv["__label"], inv["property_id"]))
+
+    default_idx = 0
+    if pid:
+        try:
+            cur = inv[inv["property_id"] == pid].iloc[0]["__label"]
+            default_idx = label_list.index(cur) if cur in label_list else 0
+        except Exception:
+            default_idx = 0
+
+    cA, cB = st.columns([3, 1])
+    with cA:
+        pick_label = st.selectbox("Select Property", label_list, index=default_idx, key="surveys_prop_pick")
+    with cB:
+        if st.button("Use Selected", type="primary", key="surveys_use_btn"):
+            if pick_label != "(Select Property)":
+                new_pid = str(label_to_pid.get(pick_label, "")).strip()
+                st.session_state["active_property_id"] = new_pid
+                st.session_state["active_pid"] = new_pid
+                st.rerun()
+
+    pid = str(st.session_state.get("active_property_id") or "").strip()
+    if not pid:
+        st.info("👆 Select a property above OR set one as Active from Map View.")
+        return
+
+    site = get_inventory_site(pid)
+    if site:
+        st.markdown(f"**{site.get('property_code','')} | {site.get('property_name','')} | {site.get('city','')}**")
+        st.caption(site.get("property_address", ""))
+
+    ensure_default_milestones(SECTION, pid, USER)
+
+    tab_view, tab_add = st.tabs(["📋 Surveys List", "➕ Add / Edit Survey"])
+
+    with tab_view:
+        df_s = list_surveys(SECTION, pid)
+        if len(df_s) == 0:
+            st.info("No surveys yet for this property. Use the Add tab to create one.")
+        else:
+            render_table_pro(df_s, title="Surveys", status_col="status",
+                             date_cols=["scheduled_on", "completed_on", "created_at"],
+                             hide_cols=infer_internal_cols(df_s), page_size_default=25)
+
+    with tab_add:
+        if not (can(SECTION, "add", ROLE) or can(SECTION, "edit", ROLE)):
+            st.info("Your role does not have permission to add/edit surveys.")
+            return
+
+        df_s2 = list_surveys(SECTION, pid)
+        edit_opts = ["(New Survey)"] + (df_s2["survey_id"].astype(str).tolist() if len(df_s2) else [])
+        pick_survey = st.selectbox("Edit existing or create new", edit_opts, key="surveys_edit_pick")
+        row_s = {}
+        if pick_survey != "(New Survey)" and len(df_s2):
+            tmp = df_s2[df_s2["survey_id"].astype(str) == pick_survey]
+            row_s = tmp.iloc[0].to_dict() if len(tmp) else {}
+
+        with st.form("survey_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                status_s = st.selectbox("Status", ["Draft", "Scheduled", "Completed", "Cancelled"],
+                    index=["Draft","Scheduled","Completed","Cancelled"].index(str(row_s.get("status","Draft")))
+                    if str(row_s.get("status","Draft")) in ["Draft","Scheduled","Completed","Cancelled"] else 0)
+                surveyor = st.text_input("Surveyor Name", value=str(row_s.get("surveyor", "") or USER))
+                contact_person = st.text_input("Contact Person at Site", value=str(row_s.get("contact_person", "") or ""))
+                contact_details = st.text_input("Contact Phone/Email", value=str(row_s.get("contact_details", "") or ""))
+            with c2:
+                scheduled_on = st.text_input("Scheduled On (YYYY-MM-DD)", value=str(row_s.get("scheduled_on", "") or ""))
+                completed_on = st.text_input("Completed On (YYYY-MM-DD)", value=str(row_s.get("completed_on", "") or ""))
+                mounting_type = st.text_input("Mounting Type", value=str(row_s.get("mounting_type", "") or ""))
+                screen_size = st.text_input("Screen Size", value=str(row_s.get("screen_size", "") or ""))
+
+            c3, c4, c5 = st.columns(3)
+            with c3:
+                site_feasible = st.checkbox("Site Feasible", value=bool(int(row_s.get("site_feasible", 1) or 1)))
+            with c4:
+                power_available = st.checkbox("Power Available", value=bool(int(row_s.get("power_available", 1) or 1)))
+            with c5:
+                internet_available = st.checkbox("Internet Available", value=bool(int(row_s.get("internet_available", 1) or 1)))
+
+            visibility_score = st.slider("Visibility Score (1–10)", 1, 10, int(row_s.get("visibility_score") or 5))
+            notes_s = st.text_area("Notes", value=str(row_s.get("notes", "") or ""), height=80)
+            ok_s = st.form_submit_button("💾 Save Survey", type="primary")
+
+        if ok_s:
+            payload = {
+                "survey_id": row_s.get("survey_id") if pick_survey != "(New Survey)" else None,
+                "section": SECTION, "property_id": pid, "status": status_s,
+                "scheduled_on": scheduled_on or None, "completed_on": completed_on or None,
+                "surveyor": surveyor, "contact_person": contact_person, "contact_details": contact_details,
+                "site_feasible": 1 if site_feasible else 0, "power_available": 1 if power_available else 0,
+                "internet_available": 1 if internet_available else 0,
+                "mounting_type": mounting_type, "screen_size": screen_size,
+                "visibility_score": visibility_score, "notes": notes_s,
+            }
+            upsert_survey(payload, USER, ROLE)
+            st.success("Survey saved!")
+            st.rerun()
+
+
+def page_milestones_pipeline():
+    """Milestones / Pipeline page — Module-1 Installation."""
+    require_module_access(SECTION_INSTALL)
+    page_title("🏗 Milestones / Pipeline", "Track installation pipeline milestones per site.")
+    if not can(SECTION, "view", ROLE):
+        st.error("Access denied.")
+        return
+
+    pid = str(st.session_state.get("active_property_id") or st.session_state.get("active_pid") or "").strip()
+    tab_all, tab_site = st.tabs(["📋 All Milestones", "🎯 Site Milestones"])
+
+    with tab_all:
+        st.caption("Overview of all installation milestones across all sites.")
+        try:
+            all_ms = qdf(
+                """SELECT m.property_id, i.property_name, i.city, m.name AS milestone,
+                          m.status, m.due_date, m.owner, m.updated_at
+                   FROM milestones m
+                   LEFT JOIN inventory_sites i ON i.property_id = m.property_id
+                   WHERE m.section = :s
+                   ORDER BY m.due_date ASC NULLS LAST LIMIT 1000""",
+                {"s": SECTION}
+            )
+            render_table_pro(all_ms, title="All Milestones", status_col="status",
+                             date_cols=["due_date","updated_at"],
+                             hide_cols=infer_internal_cols(all_ms), page_size_default=50)
+        except Exception:
+            st.info("Milestones table not found. Run DB migration first.")
+
+    with tab_site:
+        inv = qdf("SELECT property_id, property_code, property_name, city FROM inventory_sites ORDER BY property_name LIMIT 5000")
+        inv["property_id"] = inv["property_id"].fillna("").astype(str)
+        inv["__label"] = (
+            inv["property_code"].fillna("").astype(str) + " | " +
+            inv["property_name"].fillna("").astype(str) + " | " +
+            inv["city"].fillna("").astype(str)
+        ).str.strip(" |")
+        label_list = ["(Select Property)"] + inv["__label"].tolist()
+        label_to_pid = dict(zip(inv["__label"], inv["property_id"]))
+
+        default_idx = 0
+        if pid:
+            try:
+                cur = inv[inv["property_id"] == pid].iloc[0]["__label"]
+                default_idx = label_list.index(cur) if cur in label_list else 0
+            except Exception:
+                default_idx = 0
+
+        cA, cB = st.columns([3, 1])
+        with cA:
+            pick_label = st.selectbox("Select Property", label_list, index=default_idx, key="ms_prop_pick")
+        with cB:
+            if st.button("Load", type="primary", key="ms_load_btn"):
+                if pick_label != "(Select Property)":
+                    new_pid = str(label_to_pid.get(pick_label, "")).strip()
+                    st.session_state["active_property_id"] = new_pid
+                    st.session_state["active_pid"] = new_pid
+                    st.rerun()
+
+        pid = str(st.session_state.get("active_property_id") or "").strip()
+        if not pid:
+            st.info("Select a property to view its milestones.")
+            return
+
+        site = get_inventory_site(pid)
+        if site:
+            st.markdown(f"**{site.get('property_code','')} | {site.get('property_name','')} | {site.get('city','')}**")
+
+        ensure_default_milestones(SECTION, pid, USER)
+        ms_df = list_milestones(SECTION, pid)
+
+        if len(ms_df) == 0:
+            st.info("No milestones found. They are auto-created when a survey is saved.")
+            return
+
+        total = len(ms_df)
+        done = int((ms_df["status"] == "Done").sum())
+        st.progress(done / total if total else 0, text=f"Progress: {done}/{total} milestones done")
+        render_table_pro(ms_df, title="Site Milestones", status_col="status",
+                         date_cols=["due_date","completed_on"],
+                         hide_cols=infer_internal_cols(ms_df), page_size_default=25)
+
+        if can(SECTION, "edit", ROLE):
+            st.markdown("**Update a Milestone:**")
+            ms_names = ms_df["name"].tolist()
+            ms_ids = ms_df["milestone_id"].astype(str).tolist()
+            pick_ms = st.selectbox("Select Milestone", ms_names, key="ms_update_pick")
+            pick_idx = ms_names.index(pick_ms) if pick_ms in ms_names else 0
+            pick_ms_id = ms_ids[pick_idx]
+            pick_ms_row = ms_df.iloc[pick_idx].to_dict()
+
+            with st.form("ms_update_form"):
+                new_status = st.selectbox("Status", ["Pending","In Progress","Done","Blocked"],
+                    index=["Pending","In Progress","Done","Blocked"].index(str(pick_ms_row.get("status","Pending")))
+                    if str(pick_ms_row.get("status","Pending")) in ["Pending","In Progress","Done","Blocked"] else 0)
+                new_owner = st.text_input("Owner", value=str(pick_ms_row.get("owner","") or USER))
+                new_due = st.text_input("Due Date (YYYY-MM-DD)", value=str(pick_ms_row.get("due_date","") or ""))
+                new_notes = st.text_area("Notes", value=str(pick_ms_row.get("notes","") or ""), height=60)
+                ok_ms = st.form_submit_button("💾 Update Milestone", type="primary")
+
+            if ok_ms:
+                update_milestone(pick_ms_id, new_status, new_owner, new_due or None, new_notes, USER)
+                st.success(f"Milestone '{pick_ms}' updated to {new_status}.")
+                st.rerun()
+
+
+def page_agreements():
+    """Agreements page — both modules."""
+    page_title("📝 Agreements", "Manage society / client agreements.")
+    if not can(SECTION, "view", ROLE):
+        st.error("Access denied.")
+        return
+
+    q = st.text_input("Search agreements", placeholder="party name / property code / status…")
+    params_ag = {"s": SECTION}
+    sql_ag = "SELECT * FROM agreements WHERE section=:s"
+    if q.strip():
+        sql_ag += " AND (" + ilike_clause(["party_name","property_code","status","notes"], "q") + ")"
+        params_ag["q"] = sql_q(q)
+    sql_ag += " ORDER BY created_at DESC LIMIT 500"
+    df_ag = qdf(sql_ag, params_ag)
+
+    tab_view, tab_add = st.tabs(["📋 View Agreements", "➕ Add / Edit"])
+
+    with tab_view:
+        st.markdown(f"<span class='badge badge-strong'>Agreements: {len(df_ag):,}</span>", unsafe_allow_html=True)
+        render_table_pro(df_ag, title="Agreements", status_col="status",
+                         date_cols=["start_date","end_date","created_at","updated_at"],
+                         currency_cols=["rent_pm"],
+                         hide_cols=infer_internal_cols(df_ag), page_size_default=50)
+        if can(SECTION, "export", ROLE) and len(df_ag):
+            st.download_button("⬇ Export Agreements (CSV)", data=df_to_csv_bytes(df_ag),
+                               file_name="agreements.csv", mime="text/csv")
+
+    with tab_add:
+        if not (can(SECTION, "add", ROLE) or can(SECTION, "edit", ROLE)):
+            st.info("Your role does not have permission to add/edit agreements.")
+            return
+        inv_ag = qdf("SELECT property_id, property_code, property_name, city FROM inventory_sites ORDER BY property_name LIMIT 5000")
+        inv_ag["property_id"] = inv_ag["property_id"].fillna("").astype(str)
+        pid_list_ag = inv_ag["property_id"].tolist()
+        label_list_ag = (
+            inv_ag["property_code"].fillna("").astype(str) + " | " +
+            inv_ag["property_name"].fillna("").astype(str) + " | " +
+            inv_ag["city"].fillna("").astype(str)
+        ).tolist()
+        label_to_pid_ag = dict(zip(label_list_ag, pid_list_ag))
+
+        edit_opts_ag = ["(New Agreement)"] + (df_ag["agreement_id"].astype(str).tolist() if len(df_ag) else [])
+        pick_ag = st.selectbox("Edit existing or create new", edit_opts_ag, key="ag_edit_pick")
+        row_ag = {}
+        if pick_ag != "(New Agreement)" and len(df_ag):
+            tmp = df_ag[df_ag["agreement_id"].astype(str) == pick_ag]
+            row_ag = tmp.iloc[0].to_dict() if len(tmp) else {}
+        existing_pid_ag = str(row_ag.get("property_id","") or "")
+        default_ag_idx = pid_list_ag.index(existing_pid_ag) if existing_pid_ag in pid_list_ag else 0
+
+        with st.form("agreement_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                ag_prop = st.selectbox("Property", ["(None)"] + label_list_ag,
+                                       index=(default_ag_idx + 1) if existing_pid_ag in pid_list_ag else 0)
+                party_name = st.text_input("Party Name (Society / Client)", value=str(row_ag.get("party_name","") or ""))
+                property_code_ag = st.text_input("Property Code", value=str(row_ag.get("property_code","") or ""))
+            with c2:
+                start_date_ag = st.text_input("Start Date (YYYY-MM-DD)", value=str(row_ag.get("start_date","") or ""))
+                end_date_ag = st.text_input("End Date (YYYY-MM-DD)", value=str(row_ag.get("end_date","") or ""))
+                renewal_type_ag = st.selectbox("Renewal Type", ["Manual","Auto","One-time"],
+                    index=["Manual","Auto","One-time"].index(str(row_ag.get("renewal_type","Manual")))
+                    if str(row_ag.get("renewal_type","Manual")) in ["Manual","Auto","One-time"] else 0)
+            with c3:
+                rent_pm_ag = st.text_input("Rent per Month (₹)", value=str(row_ag.get("rent_pm","") or ""))
+                billing_cycle_ag = st.selectbox("Billing Cycle", ["Monthly","Quarterly","Annual","One-time"])
+                ag_status = st.selectbox("Status", ["Active","Expired","Draft","Terminated"],
+                    index=["Active","Expired","Draft","Terminated"].index(str(row_ag.get("status","Draft")))
+                    if str(row_ag.get("status","Draft")) in ["Active","Expired","Draft","Terminated"] else 2)
+            ag_notes = st.text_area("Notes", value=str(row_ag.get("notes","") or ""), height=70)
+            ok_ag = st.form_submit_button("💾 Save Agreement", type="primary")
+
+        if ok_ag:
+            ag_id = str(row_ag.get("agreement_id") or uuid.uuid4()) if pick_ag != "(New Agreement)" else str(uuid.uuid4())
+            selected_pid_ag = label_to_pid_ag.get(ag_prop) if ag_prop != "(None)" else None
+            exec_sql(
+                """INSERT INTO agreements(agreement_id,section,property_id,property_code,party_name,start_date,end_date,
+                   renewal_type,rent_pm,billing_cycle,status,notes,created_by,created_at,updated_at)
+                   VALUES(:id,:sec,:pid,:pc,:pn,:sd,:ed,:rt,:rp,:bc,:st,:no,:cb,NOW(),NOW())
+                   ON CONFLICT(agreement_id) DO UPDATE SET
+                     property_id=EXCLUDED.property_id, property_code=EXCLUDED.property_code,
+                     party_name=EXCLUDED.party_name, start_date=EXCLUDED.start_date,
+                     end_date=EXCLUDED.end_date, renewal_type=EXCLUDED.renewal_type,
+                     rent_pm=EXCLUDED.rent_pm, billing_cycle=EXCLUDED.billing_cycle,
+                     status=EXCLUDED.status, notes=EXCLUDED.notes, updated_at=NOW()""",
+                {"id": ag_id, "sec": SECTION, "pid": selected_pid_ag, "pc": property_code_ag,
+                 "pn": party_name, "sd": start_date_ag or None, "ed": end_date_ag or None,
+                 "rt": renewal_type_ag,
+                 "rp": float(rent_pm_ag) if str(rent_pm_ag).replace(".","").isdigit() else None,
+                 "bc": billing_cycle_ag, "st": ag_status, "no": ag_notes, "cb": USER}
+            )
+            audit(USER, "UPSERT_AGREEMENT", f"agreement_id={ag_id} section={SECTION}")
+            st.success("Agreement saved!")
+            st.rerun()
+
+
+def page_rent_schedule():
+    """Rent Schedule page — Module-1 Installation only."""
+    require_module_access(SECTION_INSTALL)
+    page_title("📅 Rent Schedule", "Monthly rent schedule from all active agreements.")
+    if not can(SECTION, "view", ROLE):
+        st.error("Access denied.")
+        return
+
+    try:
+        df_rs = qdf(
+            """SELECT p.payment_id, a.party_name, a.property_code,
+                      COALESCE(i.property_name,'') AS property_name,
+                      COALESCE(i.city,'') AS city,
+                      p.due_date, p.amount, p.status, p.paid_date, p.payment_mode, p.reference_no, p.notes
+               FROM payments p
+               LEFT JOIN agreements a ON a.agreement_id = p.agreement_id
+               LEFT JOIN inventory_sites i ON i.property_id = a.property_id
+               WHERE p.section = :s
+               ORDER BY p.due_date ASC LIMIT 1000""",
+            {"s": SECTION}
+        )
+    except Exception:
+        st.info("Payments table not found or no rent payments yet.")
+        return
+
+    if len(df_rs):
+        total_due = df_rs[df_rs["status"] != "Paid"]["amount"].astype(float).sum() if "amount" in df_rs.columns else 0
+        total_paid = df_rs[df_rs["status"] == "Paid"]["amount"].astype(float).sum() if "amount" in df_rs.columns else 0
+        overdue = df_rs[(df_rs["status"] == "Pending") & (df_rs["due_date"].astype(str) < str(date.today()))].shape[0] if "due_date" in df_rs.columns else 0
+        k1, k2, k3 = st.columns(3)
+        with k1: st.metric("Outstanding ₹", f"₹{total_due:,.0f}")
+        with k2: st.metric("Collected ₹", f"₹{total_paid:,.0f}")
+        with k3: st.metric("Overdue Entries", overdue)
+        st.markdown("---")
+
+    render_table_pro(df_rs, title="Rent Schedule", status_col="status",
+                     date_cols=["due_date","paid_date"], currency_cols=["amount"],
+                     hide_cols=infer_internal_cols(df_rs), page_size_default=50)
+    if can(SECTION, "export", ROLE) and len(df_rs):
+        st.download_button("⬇ Export Rent Schedule (CSV)", data=df_to_csv_bytes(df_rs),
+                           file_name="rent_schedule.csv", mime="text/csv")
+
+
+def page_payments():
+    """Payments page — both modules."""
+    page_title("💰 Payments", "Record and track payments against agreements.")
+    if not can(SECTION, "view", ROLE):
+        st.error("Access denied.")
+        return
+
+    df_py = qdf(
+        """SELECT p.*, a.party_name, a.property_code
+           FROM payments p
+           LEFT JOIN agreements a ON a.agreement_id = p.agreement_id
+           WHERE p.section = :s
+           ORDER BY p.due_date DESC LIMIT 500""",
+        {"s": SECTION}
+    )
+
+    tab_view, tab_add = st.tabs(["📋 View Payments", "➕ Record Payment"])
+
+    with tab_view:
+        if len(df_py):
+            paid = df_py[df_py["status"] == "Paid"]["amount"].astype(float).sum() if "amount" in df_py.columns else 0
+            pending = df_py[df_py["status"] != "Paid"]["amount"].astype(float).sum() if "amount" in df_py.columns else 0
+            k1, k2 = st.columns(2)
+            with k1: st.metric("Total Collected ₹", f"₹{paid:,.0f}")
+            with k2: st.metric("Total Pending ₹", f"₹{pending:,.0f}")
+        render_table_pro(df_py, title="Payments", status_col="status",
+                         date_cols=["due_date","paid_date","created_at"],
+                         currency_cols=["amount"],
+                         hide_cols=infer_internal_cols(df_py), page_size_default=50)
+        if can(SECTION, "export", ROLE) and len(df_py):
+            st.download_button("⬇ Export Payments (CSV)", data=df_to_csv_bytes(df_py),
+                               file_name="payments.csv", mime="text/csv")
+
+    with tab_add:
+        if not (can(SECTION, "add", ROLE) or can(SECTION, "edit", ROLE)):
+            st.info("Your role does not have permission to record payments.")
+            return
+        ag_df = qdf("SELECT agreement_id, party_name, property_code FROM agreements WHERE section=:s ORDER BY party_name", {"s": SECTION})
+        ag_labels = (ag_df["property_code"].fillna("").astype(str) + " — " + ag_df["party_name"].fillna("").astype(str)).tolist() if len(ag_df) else []
+        ag_ids = ag_df["agreement_id"].astype(str).tolist() if len(ag_df) else []
+
+        with st.form("payment_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                ag_pick = st.selectbox("Agreement", ["(Select)"] + ag_labels)
+                due_date_p = st.text_input("Due Date (YYYY-MM-DD)", value=str(date.today()))
+                amount_p = st.text_input("Amount (₹)", value="")
+            with c2:
+                pay_status = st.selectbox("Status", ["Pending","Paid","Overdue","Waived"])
+                paid_date_p = st.text_input("Paid Date (YYYY-MM-DD)", value="")
+                payment_mode = st.selectbox("Payment Mode", ["","NEFT","RTGS","Cash","Cheque","UPI","Online"])
+            with c3:
+                reference_no = st.text_input("Reference No.", value="")
+                notes_p = st.text_area("Notes", height=80)
+            ok_p = st.form_submit_button("💾 Record Payment", type="primary")
+
+        if ok_p:
+            if ag_pick == "(Select)":
+                st.error("Please select an agreement.")
+            else:
+                ag_idx = ag_labels.index(ag_pick) if ag_pick in ag_labels else -1
+                selected_ag_id = ag_ids[ag_idx] if ag_idx >= 0 else None
+                pay_id = str(uuid.uuid4())
+                exec_sql(
+                    """INSERT INTO payments(payment_id,agreement_id,section,due_date,amount,status,
+                       paid_date,payment_mode,reference_no,notes,created_by,created_at)
+                       VALUES(:id,:ag,:sec,:dd,:am,:st,:pd,:pm,:ref,:no,:cb,NOW())""",
+                    {"id": pay_id, "ag": selected_ag_id, "sec": SECTION,
+                     "dd": due_date_p or None,
+                     "am": float(amount_p) if str(amount_p).replace(".","").isdigit() else None,
+                     "st": pay_status, "pd": paid_date_p or None, "pm": payment_mode or None,
+                     "ref": reference_no or None, "no": notes_p or None, "cb": USER}
+                )
+                audit(USER, "RECORD_PAYMENT", f"payment_id={pay_id} section={SECTION}")
+                st.success("Payment recorded!")
+                st.rerun()
+
+
+def page_maintenance():
+    """Maintenance page — Module-1 Installation only."""
+    require_module_access(SECTION_INSTALL)
+    page_title("🛠 Maintenance", "Screen maintenance history and service scheduling.")
+    if not can(SECTION, "view", ROLE):
+        st.error("Access denied.")
+        return
+
+    df_maint = qdf(
+        """SELECT s.screen_id, i.property_name, i.city, i.district,
+                  s.screen_location, s.installed_date, s.last_service_date,
+                  s.next_service_due, s.is_active, s.last_updated
+           FROM screens s
+           LEFT JOIN inventory_sites i ON i.property_id = s.property_id
+           ORDER BY s.next_service_due ASC NULLS LAST LIMIT 1000"""
+    )
+
+    if len(df_maint) and "next_service_due" in df_maint.columns:
+        today_str = str(date.today())
+        overdue_cnt = ((df_maint["next_service_due"].astype(str) < today_str) &
+                       (df_maint["next_service_due"].astype(str) != "")).sum()
+        if overdue_cnt:
+            st.warning(f"⚠️ {overdue_cnt} screens have overdue service!")
+
+    tab_view, tab_update = st.tabs(["📋 All Screens", "🔧 Mark Serviced"])
+
+    with tab_view:
+        render_table_pro(df_maint, title="Screens Maintenance Status",
+                         date_cols=["installed_date","last_service_date","next_service_due","last_updated"],
+                         status_col="is_active",
+                         hide_cols=infer_internal_cols(df_maint), page_size_default=50)
+        if can(SECTION, "export", ROLE) and len(df_maint):
+            st.download_button("⬇ Export (CSV)", data=df_to_csv_bytes(df_maint),
+                               file_name="maintenance.csv", mime="text/csv")
+
+    with tab_update:
+        if not can(SECTION, "edit", ROLE):
+            st.info("Your role does not have permission to update maintenance records.")
+            return
+        screen_ids = df_maint["screen_id"].astype(str).tolist() if len(df_maint) else []
+        if not screen_ids:
+            st.info("No screens found. Add screens in Assets / Inventory first.")
+            return
+        pick_scr = st.selectbox("Select Screen", screen_ids, key="maint_screen_pick")
+        with st.form("maintenance_form"):
+            last_svc = st.text_input("Last Service Date (YYYY-MM-DD)", value=str(date.today()))
+            next_svc = st.text_input("Next Service Due (YYYY-MM-DD)", value="")
+            ok_svc = st.form_submit_button("✅ Mark Serviced", type="primary")
+        if ok_svc:
+            mark_serviced(pick_scr, last_svc, next_svc or None, USER, SECTION)
+            st.success("Service record updated!")
+            st.rerun()
+
+
+def page_tickets():
+    """Tickets page — both modules."""
+    page_title("🎫 Tickets", "Raise and track field issues, faults, and support requests.")
+    if not can(SECTION, "view", ROLE):
+        st.error("Access denied.")
+        return
+
+    if not table_exists("tickets"):
+        st.info(
+            "**Tickets table not yet created.**\n\n"
+            "Run this SQL in your **Supabase SQL Editor** to enable Tickets:\n\n"
+            "```sql\n"
+            "CREATE TABLE IF NOT EXISTS tickets (\n"
+            "  ticket_id TEXT PRIMARY KEY,\n"
+            "  section TEXT NOT NULL,\n"
+            "  property_id TEXT,\n"
+            "  subject TEXT NOT NULL,\n"
+            "  description TEXT,\n"
+            "  status TEXT DEFAULT 'Open',\n"
+            "  priority TEXT DEFAULT 'Medium',\n"
+            "  category TEXT,\n"
+            "  raised_by TEXT,\n"
+            "  assigned_to TEXT,\n"
+            "  resolved_at TIMESTAMP,\n"
+            "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n"
+            "  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n"
+            ");\n"
+            "CREATE INDEX IF NOT EXISTS idx_tickets_section ON tickets(section, status);\n"
+            "```"
+        )
+        return
+
+    df_tk = qdf("SELECT * FROM tickets WHERE section=:s ORDER BY created_at DESC LIMIT 500", {"s": SECTION})
+    tab_view, tab_add = st.tabs(["📋 View Tickets", "➕ Raise Ticket"])
+
+    with tab_view:
+        st.markdown(f"<span class='badge badge-strong'>Tickets: {len(df_tk):,}</span>", unsafe_allow_html=True)
+        render_table_pro(df_tk, title="Tickets", status_col="status",
+                         date_cols=["resolved_at","created_at","updated_at"],
+                         hide_cols=infer_internal_cols(df_tk), page_size_default=50)
+
+    with tab_add:
+        if not can(SECTION, "add", ROLE):
+            st.info("Your role does not have permission to raise tickets.")
+            return
+        with st.form("ticket_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                subject = st.text_input("Subject *", placeholder="e.g. Screen not displaying")
+                category = st.selectbox("Category", ["Hardware","Software","Power","Network","Maintenance","Other"])
+                priority = st.selectbox("Priority", ["Low","Medium","High","Critical"], index=1)
+            with c2:
+                tk_status = st.selectbox("Status", ["Open","In Progress","Resolved","Closed"])
+                assigned_to_tk = st.text_input("Assign To", value=USER)
+                property_id_tk = st.text_input("Property ID (optional)", value=str(st.session_state.get("active_property_id","") or ""))
+            description = st.text_area("Description", height=100)
+            ok_tk = st.form_submit_button("🎫 Raise Ticket", type="primary")
+        if ok_tk:
+            if not subject.strip():
+                st.error("Subject is required.")
+            else:
+                tk_id = str(uuid.uuid4())
+                exec_sql(
+                    """INSERT INTO tickets(ticket_id,section,property_id,subject,description,status,priority,
+                       category,raised_by,assigned_to,created_at,updated_at)
+                       VALUES(:id,:sec,:pid,:sub,:desc,:st,:pri,:cat,:rb,:at,NOW(),NOW())""",
+                    {"id": tk_id, "sec": SECTION, "pid": property_id_tk or None,
+                     "sub": subject, "desc": description or None,
+                     "st": tk_status, "pri": priority, "cat": category,
+                     "rb": USER, "at": assigned_to_tk or None}
+                )
+                audit(USER, "RAISE_TICKET", f"ticket_id={tk_id} section={SECTION}")
+                st.success(f"Ticket raised! ID: {tk_id[:8]}")
+                st.rerun()
+
+
+def page_assets_inventory():
+    """Assets / Inventory page — Module-1 Installation only."""
+    require_module_access(SECTION_INSTALL)
+    page_title("📦 Assets / Inventory", "Screen hardware inventory — registered screens per site.")
+    if not can(SECTION, "view", ROLE):
+        st.error("Access denied.")
+        return
+
+    q = st.text_input("Search screens", placeholder="property / location / installer / screen ID…").strip()
+    params_ai = {}
+    sql_ai = """SELECT s.screen_id, i.property_code, i.property_name, i.city, i.district,
+                      s.screen_location, s.installed_by, s.installed_date,
+                      s.last_service_date, s.next_service_due, s.is_active, s.last_updated
+               FROM screens s LEFT JOIN inventory_sites i ON i.property_id = s.property_id"""
+    if q:
+        sql_ai += " WHERE " + ilike_clause(["s.screen_id","i.property_name","i.city","s.screen_location","s.installed_by"], "q")
+        params_ai["q"] = sql_q(q)
+    sql_ai += " ORDER BY s.last_updated DESC LIMIT 2000"
+    df_ai = qdf(sql_ai, params_ai)
+
+    if len(df_ai):
+        active_cnt = int((df_ai["is_active"].astype(str).isin(["1","True","true"])).sum()) if "is_active" in df_ai.columns else 0
+        k1, k2 = st.columns(2)
+        with k1: st.metric("Total Screens", len(df_ai))
+        with k2: st.metric("Active Screens", active_cnt)
+
+    tab_view, tab_add = st.tabs(["📋 View Screens", "➕ Add / Edit Screen"])
+
+    with tab_view:
+        render_table_pro(df_ai, title="Screens",
+                         date_cols=["installed_date","last_service_date","next_service_due","last_updated"],
+                         status_col="is_active", hide_cols=infer_internal_cols(df_ai), page_size_default=50)
+        if can(SECTION, "export", ROLE) and len(df_ai):
+            st.download_button("⬇ Export Screens (CSV)", data=df_to_csv_bytes(df_ai),
+                               file_name="screens_inventory.csv", mime="text/csv")
+
+    with tab_add:
+        if not (can(SECTION, "add", ROLE) or can(SECTION, "edit", ROLE)):
+            st.info("Your role does not have permission to add/edit screens.")
+            return
+        inv_ai = qdf("SELECT property_id, property_code, property_name, city FROM inventory_sites ORDER BY property_name LIMIT 5000")
+        inv_ai["property_id"] = inv_ai["property_id"].fillna("").astype(str)
+        prop_ids_ai = inv_ai["property_id"].tolist()
+        prop_labels_ai = (
+            inv_ai["property_code"].fillna("").astype(str) + " | " +
+            inv_ai["property_name"].fillna("").astype(str) + " | " +
+            inv_ai["city"].fillna("").astype(str)
+        ).tolist()
+        pid_to_label_ai = dict(zip(prop_ids_ai, prop_labels_ai))
+
+        edit_opts_ai = ["(New Screen)"] + (df_ai["screen_id"].astype(str).tolist() if len(df_ai) else [])
+        pick_scr = st.selectbox("Edit existing or add new", edit_opts_ai, key="ai_scr_pick")
+        row_scr = {}
+        if pick_scr != "(New Screen)" and len(df_ai):
+            tmp = df_ai[df_ai["screen_id"].astype(str) == pick_scr]
+            row_scr = tmp.iloc[0].to_dict() if len(tmp) else {}
+        existing_pid_scr = str(row_scr.get("property_id","") or "")
+        default_prop_ai = prop_labels_ai.index(pid_to_label_ai[existing_pid_scr]) if existing_pid_scr in pid_to_label_ai else 0
+
+        with st.form("assets_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                scr_id_ai = st.text_input("Screen ID", value=str(row_scr.get("screen_id","")) if pick_scr != "(New Screen)" else str(uuid.uuid4()))
+                scr_prop = st.selectbox("Property", prop_labels_ai, index=default_prop_ai)
+                scr_location = st.text_input("Screen Location", value=str(row_scr.get("screen_location","") or ""))
+                scr_installed_by = st.text_input("Installed By", value=str(row_scr.get("installed_by","") or USER))
+            with c2:
+                scr_installed_date = st.text_input("Installed Date (YYYY-MM-DD)", value=str(row_scr.get("installed_date","") or ""))
+                scr_last_svc = st.text_input("Last Service Date (YYYY-MM-DD)", value=str(row_scr.get("last_service_date","") or ""))
+                scr_next_svc = st.text_input("Next Service Due (YYYY-MM-DD)", value=str(row_scr.get("next_service_due","") or ""))
+                scr_active = st.checkbox("Active", value=bool(int(row_scr.get("is_active",1) or 1)))
+            ok_ai = st.form_submit_button("💾 Save Screen", type="primary")
+
+        if ok_ai:
+            prop_idx_ai = prop_labels_ai.index(scr_prop) if scr_prop in prop_labels_ai else 0
+            selected_pid_ai = prop_ids_ai[prop_idx_ai] if prop_ids_ai else None
+            upsert_screen({
+                "screen_id": scr_id_ai, "property_id": selected_pid_ai,
+                "screen_location": scr_location, "installed_by": scr_installed_by,
+                "installed_date": scr_installed_date or None,
+                "last_service_date": scr_last_svc or None,
+                "next_service_due": scr_next_svc or None,
+                "is_active": 1 if scr_active else 0,
+            }, username=USER)
+            if selected_pid_ai:
+                update_inventory_screen_count(selected_pid_ai)
+            st.success("Screen saved!")
+            st.rerun()
+
+
+# =========================================================
+# MODULE-2 NEW PAGE FUNCTIONS (Advertisement)
+# =========================================================
+
+def page_ad_display_schedule():
+    """Ad Display Schedule page — Module-2 Advertisement only."""
+    require_module_access(SECTION_ADS)
+    page_title("📅 Ad Display Schedule", "Campaign → Screen slot schedule and booking calendar.")
+    if not can(SECTION, "view", ROLE):
+        st.error("Access denied.")
+        return
+
+    q = st.text_input("Search", placeholder="client / screen / status…").strip()
+    params_ads = {"s": SECTION}
+    sql_ads = "SELECT * FROM ad_inventory WHERE section=:s"
+    if q:
+        sql_ads += " AND (" + ilike_clause(["client_name","screen_id","status","slot_name","notes"], "q") + ")"
+        params_ads["q"] = sql_q(q)
+    sql_ads += " ORDER BY start_date ASC LIMIT 500"
+    df_ads = qdf(sql_ads, params_ads)
+
+    tab_view, tab_add = st.tabs(["📋 View Schedule", "➕ Book Slot"])
+
+    with tab_view:
+        render_table_pro(df_ads, title="Ad Display Schedule", status_col="status",
+                         date_cols=["start_date","end_date","created_at"],
+                         currency_cols=["rate"], hide_cols=infer_internal_cols(df_ads), page_size_default=50)
+        if can(SECTION, "export", ROLE) and len(df_ads):
+            st.download_button("⬇ Export Schedule (CSV)", data=df_to_csv_bytes(df_ads),
+                               file_name="ad_schedule.csv", mime="text/csv")
+
+    with tab_add:
+        if not (can(SECTION, "add", ROLE) or can(SECTION, "edit", ROLE)):
+            st.info("Your role does not have permission to book ad slots.")
+            return
+        scr_df = qdf("SELECT screen_id FROM screens ORDER BY screen_id LIMIT 1000")
+        scr_ids = scr_df["screen_id"].astype(str).tolist() if len(scr_df) else []
+        edit_opts_ads = ["(New Booking)"] + (df_ads["ad_id"].astype(str).tolist() if len(df_ads) else [])
+        pick_ad = st.selectbox("Edit existing or add new", edit_opts_ads, key="ads_sched_pick")
+        row_ad = {}
+        if pick_ad != "(New Booking)" and len(df_ads):
+            tmp = df_ads[df_ads["ad_id"].astype(str) == pick_ad]
+            row_ad = tmp.iloc[0].to_dict() if len(tmp) else {}
+
+        with st.form("ad_sched_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                client_name = st.text_input("Client / Advertiser Name *", value=str(row_ad.get("client_name","") or ""))
+                slot_name = st.text_input("Slot / Campaign Name", value=str(row_ad.get("slot_name","") or ""))
+                ad_screen = st.selectbox("Screen", ["(Select)"] + scr_ids,
+                    index=(scr_ids.index(str(row_ad.get("screen_id",""))) + 1) if str(row_ad.get("screen_id","")) in scr_ids else 0)
+            with c2:
+                start_date_ad = st.text_input("Start Date (YYYY-MM-DD)", value=str(row_ad.get("start_date","") or str(date.today())))
+                end_date_ad = st.text_input("End Date (YYYY-MM-DD)", value=str(row_ad.get("end_date","") or ""))
+                rate_ad = st.text_input("Rate (₹)", value=str(row_ad.get("rate","") or ""))
+            with c3:
+                ad_status = st.selectbox("Status", ["Pending","Confirmed","Active","Completed","Cancelled"],
+                    index=["Pending","Confirmed","Active","Completed","Cancelled"].index(str(row_ad.get("status","Pending")))
+                    if str(row_ad.get("status","Pending")) in ["Pending","Confirmed","Active","Completed","Cancelled"] else 0)
+                notes_ad = st.text_area("Notes", value=str(row_ad.get("notes","") or ""), height=80)
+            ok_ad = st.form_submit_button("💾 Save Booking", type="primary")
+
+        if ok_ad:
+            if not client_name.strip():
+                st.error("Client name is required.")
+            else:
+                ad_id = str(row_ad.get("ad_id") or uuid.uuid4()) if pick_ad != "(New Booking)" else str(uuid.uuid4())
+                selected_scr = ad_screen if ad_screen != "(Select)" else None
+                exec_sql(
+                    """INSERT INTO ad_inventory(ad_id,section,screen_id,slot_name,client_name,start_date,end_date,rate,status,notes,created_by,created_at,updated_at)
+                       VALUES(:id,:sec,:scr,:slot,:cn,:sd,:ed,:rt,:st,:no,:cb,NOW(),NOW())
+                       ON CONFLICT(ad_id) DO UPDATE SET
+                         screen_id=EXCLUDED.screen_id, slot_name=EXCLUDED.slot_name,
+                         client_name=EXCLUDED.client_name, start_date=EXCLUDED.start_date,
+                         end_date=EXCLUDED.end_date, rate=EXCLUDED.rate,
+                         status=EXCLUDED.status, notes=EXCLUDED.notes, updated_at=NOW()""",
+                    {"id": ad_id, "sec": SECTION, "scr": selected_scr, "slot": slot_name,
+                     "cn": client_name, "sd": start_date_ad or None, "ed": end_date_ad or None,
+                     "rt": float(rate_ad) if str(rate_ad).replace(".","").isdigit() else None,
+                     "st": ad_status, "no": notes_ad or None, "cb": USER}
+                )
+                audit(USER, "UPSERT_AD_SLOT", f"ad_id={ad_id} client={client_name}")
+                st.success("Booking saved!")
+                st.rerun()
+
+
+def page_payments_invoice():
+    """Payments / Invoice page — Module-2 Advertisement only."""
+    require_module_access(SECTION_ADS)
+    page_title("💰 Payments / Invoice", "Advertiser payment tracking and invoice management.")
+    if not can(SECTION, "view", ROLE):
+        st.error("Access denied.")
+        return
+    df_pi = qdf(
+        """SELECT p.*, a.party_name AS client, a.property_code
+           FROM payments p
+           LEFT JOIN agreements a ON a.agreement_id = p.agreement_id
+           WHERE p.section = :s
+           ORDER BY p.due_date DESC LIMIT 500""",
+        {"s": SECTION}
+    )
+    if len(df_pi):
+        paid = df_pi[df_pi["status"] == "Paid"]["amount"].astype(float).sum() if "amount" in df_pi.columns else 0
+        pending = df_pi[df_pi["status"] != "Paid"]["amount"].astype(float).sum() if "amount" in df_pi.columns else 0
+        k1, k2 = st.columns(2)
+        with k1: st.metric("Total Collected ₹", f"₹{paid:,.0f}")
+        with k2: st.metric("Total Pending ₹", f"₹{pending:,.0f}")
+    render_table_pro(df_pi, title="Payments / Invoices", status_col="status",
+                     date_cols=["due_date","paid_date","created_at"],
+                     currency_cols=["amount"], hide_cols=infer_internal_cols(df_pi), page_size_default=50)
+    if can(SECTION, "export", ROLE) and len(df_pi):
+        st.download_button("⬇ Export (CSV)", data=df_to_csv_bytes(df_pi),
+                           file_name="ad_payments.csv", mime="text/csv")
+
+
+def page_client_reports():
+    """Client Reports page — Module-2 Advertisement only."""
+    require_module_access(SECTION_ADS)
+    page_title("📊 Client Reports", "Client-wise payment and campaign performance summary.")
+    if not can(SECTION, "view", ROLE):
+        st.error("Access denied.")
+        return
+    try:
+        df_cr = qdf(
+            """SELECT COALESCE(a.party_name,'Unknown') AS client,
+                      COUNT(p.payment_id) AS total_invoices,
+                      SUM(CASE WHEN p.status='Paid' THEN p.amount ELSE 0 END) AS total_paid,
+                      SUM(CASE WHEN p.status!='Paid' THEN p.amount ELSE 0 END) AS outstanding,
+                      MIN(p.due_date) AS first_invoice,
+                      MAX(p.due_date) AS last_invoice
+               FROM payments p
+               LEFT JOIN agreements a ON a.agreement_id = p.agreement_id
+               WHERE p.section = :s
+               GROUP BY a.party_name ORDER BY total_paid DESC LIMIT 200""",
+            {"s": SECTION}
+        )
+    except Exception:
+        st.info("No payment data yet for client reports.")
+        return
+    if len(df_cr) == 0:
+        st.info("No payment data yet. Record payments in Payments / Invoice to see client reports.")
+        return
+    total_rev = float(df_cr["total_paid"].sum()) if "total_paid" in df_cr.columns else 0
+    total_out = float(df_cr["outstanding"].sum()) if "outstanding" in df_cr.columns else 0
+    k1, k2, k3 = st.columns(3)
+    with k1: st.metric("Total Clients", len(df_cr))
+    with k2: st.metric("Total Revenue ₹", f"₹{total_rev:,.0f}")
+    with k3: st.metric("Outstanding ₹", f"₹{total_out:,.0f}")
+    st.markdown("---")
+    render_table_pro(df_cr, title="Client-wise Report",
+                     currency_cols=["total_paid","outstanding"],
+                     date_cols=["first_invoice","last_invoice"],
+                     hide_cols=infer_internal_cols(df_cr), page_size_default=50)
+    if can(SECTION, "export", ROLE):
+        st.download_button("⬇ Export Client Report (CSV)", data=df_to_csv_bytes(df_cr),
+                           file_name="client_report.csv", mime="text/csv")
+
+
+def render_page(page_key: str):
+    """Central page router — maps normalized PAGE_KEY to page function."""
+    routes = {
+        # ── Shared (both modules) ────────────────────────────────
+        "Home":                      page_home,
+        "Map View":                  page_map_view,
+        "Leads Pipeline":            page_leads_pipeline,
+        "Agreements":                page_agreements,
+        "Payments":                  page_payments,
+        "Documents Vault":           page_documents_vault,
+        "WhatsApp":                  page_whatsapp,
+        "Reports":                   page_reports,
+        "Admin Panel":               page_admin_panel,
+        "Tickets":                   page_tickets,
+
+        # ── Module-1 (Installation) ──────────────────────────────
+        "Surveys":                   page_surveys,
+        "Milestones / Pipeline":     page_milestones_pipeline,
+        "Rent Schedule":             page_rent_schedule,
+        "Maintenance":               page_maintenance,
+        "Assets / Inventory":        page_assets_inventory,
+
+        # ── Module-2 (Advertisement) ─────────────────────────────
+        "Proposal / Quotation":      page_proposals,
+        "Ad Display Schedule":       page_ad_display_schedule,
+        "Payments / Invoice":        page_payments_invoice,
+        "Client Reports":            page_client_reports,
+
+        # ── Legacy keys (backward compatibility) ─────────────────
+        "Management Dashboard":      page_management_dashboard,
+        "Inventory (Sites)":         page_inventory_sites,
+        "Screens":                   page_screens,
+        "Proposals":                 page_proposals,
+    }
     fn = routes.get(page_key)
     if fn is None:
-        st.warning(f"Page not implemented yet: {page_key}")
+        st.warning(f"Page '{page_key}' is not implemented yet.")
         return
     fn()
 
@@ -7459,15 +8365,60 @@ if PAGE_KEY == "Contacts":
 
 
 if PAGE_KEY == "Home":
-    # =========================================================
-    # MODULE-SPECIFIC HOME (UI-only)
-    # - Module-1: Installation KPIs + pipeline + dues + service + map preview + quick search
-    # - Module-2: Ads KPIs + proposal funnel + billing + map preview + quick search
-    # =========================================================
+    # ── Module-specific dashboard title & KPIs ───────────────────────────────
     if SECTION == SECTION_INSTALL:
-        page_title("🏠 Home — Installation", "Lead → Survey → Install → Active → Rent → Maintenance")
+        page_title(
+            "🏠 Installation Dashboard",
+            "Module 1 — Lead Generation → Survey → Install → Maintenance → Payments"
+        )
+        k1, k2, k3, k4, k5 = st.columns(5)
+        try:
+            total_leads   = int(qdf("SELECT COUNT(*) AS c FROM lead_updates WHERE section=:s", {"s": SECTION}).iloc[0]["c"] or 0)
+            installed     = int(qdf("SELECT COUNT(*) AS c FROM lead_updates WHERE section=:s AND status='Installed'", {"s": SECTION}).iloc[0]["c"] or 0)
+            active_scr    = int(qdf("SELECT COUNT(*) AS c FROM screens WHERE is_active=1").iloc[0]["c"] or 0)
+            pending_rent  = int(qdf("SELECT COUNT(*) AS c FROM payments WHERE section=:s AND status='Pending'", {"s": SECTION}).iloc[0]["c"] or 0)
+            open_tix      = int(qdf("SELECT COUNT(*) AS c FROM tickets WHERE section=:s AND status='Open'", {"s": SECTION}).iloc[0]["c"] or 0) if table_exists("tickets") else 0
+        except Exception:
+            total_leads = installed = active_scr = pending_rent = open_tix = 0
+        with k1: st.metric("Total Leads", total_leads)
+        with k2: st.metric("Installed Sites", installed)
+        with k3: st.metric("Active Screens", active_scr)
+        with k4: st.metric("Pending Rent", pending_rent)
+        with k5: st.metric("Open Tickets", open_tix)
+        st.markdown("---")
+        st.info(
+            "**Installation Flow:** "
+            "Leads Pipeline → Surveys → Milestones / Pipeline → Agreements → "
+            "Rent Schedule → Payments → Maintenance → Tickets → Assets / Inventory"
+        )
+        st.markdown("---")
     else:
-        page_title("🏠 Home — Advertisements", "Lead → Proposal → Booking → Campaign → Billing → Reports")
+        page_title(
+            "🏠 Advertisement Dashboard",
+            "Module 2 — Lead Generation → Proposal → Agreement → Schedule → Payments → Reports"
+        )
+        k1, k2, k3, k4, k5 = st.columns(5)
+        try:
+            ad_leads     = int(qdf("SELECT COUNT(*) AS c FROM lead_updates WHERE section=:s", {"s": SECTION}).iloc[0]["c"] or 0)
+            proposals    = int(qdf("SELECT COUNT(*) AS c FROM lead_updates WHERE section=:s AND status='Interested'", {"s": SECTION}).iloc[0]["c"] or 0)
+            active_camp  = int(qdf("SELECT COUNT(*) AS c FROM ad_inventory WHERE section=:s AND status='Active'", {"s": SECTION}).iloc[0]["c"] or 0)
+            pending_inv  = int(qdf("SELECT COUNT(*) AS c FROM payments WHERE section=:s AND status='Pending'", {"s": SECTION}).iloc[0]["c"] or 0)
+            total_rev    = float(qdf("SELECT COALESCE(SUM(amount),0) AS s FROM payments WHERE section=:s AND status='Paid'", {"s": SECTION}).iloc[0]["s"] or 0)
+        except Exception:
+            ad_leads = proposals = active_camp = pending_inv = 0
+            total_rev = 0.0
+        with k1: st.metric("Ad Leads", ad_leads)
+        with k2: st.metric("Proposals Sent", proposals)
+        with k3: st.metric("Active Campaigns", active_camp)
+        with k4: st.metric("Pending Invoices", pending_inv)
+        with k5: st.metric("Revenue ₹", f"₹{total_rev:,.0f}")
+        st.markdown("---")
+        st.info(
+            "**Advertisement Flow:** "
+            "Leads Pipeline → Proposal / Quotation → Milestones / Pipeline → Agreements → "
+            "Ad Display Schedule → Payments / Invoice → Client Reports → Tickets"
+        )
+        st.markdown("---")
 
     # ---------------------------
     # Optional global search (across modules)
@@ -7489,152 +8440,37 @@ if PAGE_KEY == "Home":
                         data=df_to_csv_bytes(dfm),
                         file_name=f"{mod.replace(' ','_').lower()}_search.csv",
                         mime="text/csv",
-                        key=f"home_export_{mod}",
                     )
         if not any_hit:
             st.info("No results found in database modules for this search.")
         st.markdown("---")
 
     # ---------------------------
-    # KPI strip (safe counts only; no logic changes)
-    # ---------------------------
-    def _safe_count(sql: str, params: dict | None = None) -> int:
-        try:
-            dfc = qdf(sql, params or {})
-            return int(len(dfc)) if dfc is not None else 0
-        except Exception:
-            return 0
-
-    def _safe_sum(sql: str, params: dict | None = None, col: str = "amount") -> float:
-        try:
-            dfs = qdf(sql, params or {})
-            if dfs is None or len(dfs) == 0 or col not in dfs.columns:
-                return 0.0
-            return float(pd.to_numeric(dfs[col], errors="coerce").fillna(0).sum())
-        except Exception:
-            return 0.0
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        kpi("Total Leads", f"{len(leads_df):,}")
-    with c2:
-        kpi("Interested", f"{int((leads_df['status'] == 'Interested').sum()):,}")
-    with c3:
-        if SECTION == SECTION_INSTALL:
-            sites = _safe_count("SELECT property_id FROM inventory_sites LIMIT 500000") if table_exists("inventory_sites") else 0
-            kpi("Installed Sites", f"{sites:,}")
-        else:
-            props = _safe_count("SELECT proposal_id FROM proposals WHERE section=:s", {"s": SECTION}) if table_exists("proposals") else 0
-            kpi("Proposals", f"{props:,}")
-    with c4:
-        if table_exists("payments"):
-            overdue = _safe_count(
-                "SELECT payment_id FROM payments WHERE section=:s AND status IN ('due','pending') AND COALESCE(due_date,'') <> '' AND due_date::date < CURRENT_DATE",
-                {"s": SECTION},
-            )
-            kpi("Overdue Payments", f"{overdue:,}")
-        else:
-            kpi("Overdue Payments", "—")
-
-    # ---------------------------
-    # Pipeline widgets (module-specific)
-    # ---------------------------
-    st.markdown("### 📍 Pipeline Snapshot")
-    if SECTION == SECTION_INSTALL:
-        # Lead → Survey → Active using available tables
-        p1, p2, p3, p4, p5 = st.columns(5)
-        with p1:
-            kpi("Leads (New)", f"{int((leads_df['status'] == 'New').sum()):,}")
-        with p2:
-            kpi("Contacted", f"{int((leads_df['status'] == 'Contacted').sum()):,}")
-        with p3:
-            surv = _safe_count("SELECT survey_id FROM surveys WHERE section=:s", {"s": SECTION}) if table_exists("surveys") else 0
-            kpi("Surveys", f"{surv:,}")
-        with p4:
-            ms = _safe_count("SELECT milestone_id FROM milestones WHERE section=:s", {"s": SECTION}) if table_exists("milestones") else 0
-            kpi("Milestones", f"{ms:,}")
-        with p5:
-            act = _safe_count("SELECT agreement_id FROM agreements WHERE section=:s", {"s": SECTION}) if table_exists("agreements") else 0
-            kpi("Agreements", f"{act:,}")
-
-        st.caption("Tip: Open **Property 360 (Install)** from the sidebar to manage Survey → Workorders → Milestones for an active property.")
-    else:
-        # Lead → Proposal using available table(s)
-        p1, p2, p3, p4, p5 = st.columns(5)
-        with p1:
-            kpi("Leads (New)", f"{int((leads_df['status'] == 'New').sum()):,}")
-        with p2:
-            kpi("Interested", f"{int((leads_df['status'] == 'Interested').sum()):,}")
-        with p3:
-            props = _safe_count("SELECT proposal_id FROM proposals WHERE section=:s", {"s": SECTION}) if table_exists("proposals") else 0
-            kpi("Proposals", f"{props:,}")
-        with p4:
-            inv = _safe_sum("SELECT amount FROM payments WHERE section=:s AND status IN ('due','pending')", {"s": SECTION}, col="amount") if table_exists("payments") else 0.0
-            kpi("Outstanding (₹)", f"{inv:,.0f}")
-        with p5:
-            kpi("Reports", "Open →")
-
-    # ---------------------------
-    # Dues / service / tickets panels (safe + non-breaking)
-    # ---------------------------
-    a, b = st.columns([1.2, 1])
-    with a:
-        st.markdown("### 💰 Dues / Overdues")
-        if table_exists("payments"):
-            pay = qdf(
-                """
-                SELECT payment_id, agreement_id, amount, due_date, status, notes
-                FROM payments
-                WHERE section = :s
-                ORDER BY COALESCE(due_date,'2999-12-31')::date ASC
-                LIMIT 50
-                """,
-                {"s": SECTION},
-            )
-            render_table_pro(pay, title="Upcoming / Overdue", hide_cols=infer_internal_cols(pay), date_cols=["due_date"], currency_cols=["amount"], page_size_default=25)
-        else:
-            st.info("Payments module not available (payments table missing).")
-
-    with b:
-        st.markdown("### 🗺 Map Preview")
-        st.caption("Open **Map View** for full filters, Active Property selection and Google Maps links.")
-        if st.button("Open Map View", type="primary", key="home_open_map"):
-            st.session_state["nav_page"] = "🗺 Map View"
-            st.rerun()
-
-        st.markdown("### 🛠 Service / Tickets")
-        if table_exists("screens"):
-            due_soon = _safe_count(
-                "SELECT screen_id FROM screens WHERE COALESCE(next_service_due,'') <> '' AND next_service_due::date <= (CURRENT_DATE + INTERVAL '14 day')",
-                {}
-            )
-            kpi("Service Due (14d)", f"{due_soon:,}")
-        else:
-            st.info("Service KPIs require **screens** table fields (next_service_due).")
-
-    st.markdown("---")
-
-    # ---------------------------
-    # Quick Search & Call (re-uses existing search panel / cards)
+    # Local search panel (District -> City -> Query)
     # ---------------------------
     st.markdown('<div class="sticky-wrap">', unsafe_allow_html=True)
-    df_filtered = render_search_panel_leads(leads_df, key_prefix="home", title="🔎 Quick Search (District → City → Property)")
+    df_filtered = render_search_panel_leads(leads_df, key_prefix="home", title="🔎 District → City → Property (Search & Call)")
     st.markdown("</div>", unsafe_allow_html=True)
 
     view_mode = st.radio("View", ["Cards (Contacts)", "Table"], horizontal=True, index=0, key="home_view_mode")
 
     if not st.session_state.get("home_searched"):
-        st.info("Use the search panel above and click **Search** (press Enter works).")
+        st.info("Use the search panel above and click **Search**. You can then call/WhatsApp/email directly from results.")
     else:
         if view_mode.startswith("Cards"):
+            # Contact-first UI for calling
             allow_updates = bool(can(SECTION, "write", ROLE))
+            # plug-in update function only if your code has it
             update_fn = None
             if "upsert_lead_update" in globals():
                 def _upd(pid, status="New", notes="", follow_up="", last_call_outcome=None):
+                    # keep existing upsert signature if present
                     try:
                         upsert_lead_update(SECTION, pid, status=status, notes=notes, follow_up=follow_up, last_call_outcome=last_call_outcome)
                     except TypeError:
+                        # fallback older signature
                         upsert_lead_update(pid, status=status, notes=notes, follow_up=follow_up, last_call_outcome=last_call_outcome)
+
                 update_fn = _upd
 
             render_lead_contact_cards(
@@ -7647,25 +8483,21 @@ if PAGE_KEY == "Home":
                 role=ROLE,
             )
         else:
-            dfv = safe_df_cols(
-                df_filtered,
-                [
-                    "District", "City", "Property Name", "Property Address",
-                    "Promoter / Developer Name", "Promoter Mobile Number", "Promoter Email",
-                    "status", "assigned_to", "follow_up",
-                ],
-            )
+            # Table mode (pro table with built-in pagination/search)
+            view_cols = [
+                "District", "City", "Property Name", "Property Address",
+                "Promoter / Developer Name", "Promoter Mobile Number", "Promoter Email",
+                "status", "assigned_to", "follow_up",
+            ]
+            dfv = safe_df_cols(df_filtered, view_cols)
             render_table_pro(
                 dfv,
-                title="Search Results",
+                title="Leads (Search Results)",
                 hide_cols=infer_internal_cols(dfv),
                 date_cols=[c for c in ["follow_up", "last_updated"] if c in dfv.columns],
                 status_col="status" if "status" in dfv.columns else None,
                 page_size_default=50,
             )
-
-    st.stop()
-
 
 elif PAGE_KEY == "Management Dashboard":
 
@@ -8953,4 +9785,6 @@ else:
     st.info("This page is not implemented yet in this build.")
 
 
-# ---- Router call removed (pages are handled in the PAGE_KEY switch above) ----
+# ---- Call the router ----
+render_page(PAGE_KEY)
+st.stop()
