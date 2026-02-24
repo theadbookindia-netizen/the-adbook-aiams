@@ -4508,7 +4508,39 @@ bootstrap_if_no_users()
 def require_auth():
     if "auth" in st.session_state:
         return
-    with st.sidebar:
+    
+def page_required_action(page_key: str) -> str:
+    """Return minimum permission action required to show a page in menu (UI-only)."""
+    k = (page_key or "").strip()
+    if k in ["Admin Panel"]:
+        return "view"
+    if k in ["Reports"]:
+        return "export"
+    return "view"
+
+def build_menu_for(section: str, role: str) -> list[str]:
+    """Filter module menu so users only see pages they can access (UI-only)."""
+    base = MENU_INSTALL if section == SECTION_INSTALL else MENU_ADS
+    out: list[str] = []
+    for label in base:
+        page_key = re.sub(r"^[^A-Za-z0-9]+\s*", "", label).strip()
+        req = page_required_action(page_key)
+        # Special case: Property 360 should only appear for Installation
+        if page_key == "Property 360 (Install)" and section != SECTION_INSTALL:
+            continue
+        # Hide pages the role can't access
+        if can(section, req, role):
+            out.append(label)
+    # Admin Panel (already filtered by can(admin)) — also keep your existing head toggle
+    if (role == ROLE_SUPER_ADMIN) or (ADMIN_HEAD_ENABLED and role == ROLE_MARKETING_HEAD):
+        if "Admin Panel" not in [re.sub(r"^[^A-Za-z0-9]+\s*", "", x).strip() for x in out] :
+            out.append("🛡 Admin Panel")
+    # Dedicated Contacts always available if user can view
+    if can(section, "view", role) and "📇 Contacts" not in out:
+        out.append("📇 Contacts")
+    return out
+
+with st.sidebar:
         st.markdown("### 🔐 Login")
         u = st.text_input("Username").strip()
         p = st.text_input("Password", type="password")
@@ -4595,20 +4627,44 @@ def require_module_access(section: str):
 # =========================================================
 # SIDEBAR + MENU (Original Layout Preserved)
 # =========================================================
+# ---------------------------------------------------------
+# MODULE-WISE MENUS (UI-only)
+# - Keep keys matching existing PAGE_KEY handlers/routes
+# - Order aligns to operational flow (Installation vs Advertisements)
+# ---------------------------------------------------------
 MENU_INSTALL = [
-    "🏠 Home", "📈 Management Dashboard", "🎯 Installation Opportunities",
-    "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "🗂 Inventory (Sites)", "🖥 Screens",
-    "🛠 Service Center", "📢 Ad Sales Inventory", "📝 Agreements",
-    "💰 Billing & Reminders", "📄 Documents Vault", "🗺 Map View",
-    "📃 Proposals", "💬 WhatsApp", "📊 Reports"
+    "🏠 Home",
+    "📈 Management Dashboard",
+    "🗺 Map View",
+    "🧩 Leads Pipeline",
+    "🧩 Property 360 (Install)",
+    "🗂 Inventory (Sites)",
+    "📺 Screens",
+    "📝 Agreements",
+    "💰 Billing & Reminders",
+    "🛠 Service Center",
+    "⏰ Tasks & Alerts",
+    "📄 Documents Vault",
+    "📊 Reports",
+    "💬 WhatsApp",
 ]
 
 MENU_ADS = [
-    "🏠 Home", "📈 Management Dashboard", "💼 Ads Opportunities",
-    "🧩 Leads Pipeline", "⏰ Tasks & Alerts", "📢 Ad Sales Inventory",
-    "📝 Agreements", "💰 Billing & Reminders", "💬 WhatsApp", "📊 Reports"
+    "🏠 Home",
+    "📈 Management Dashboard",
+    "🗺 Map View",
+    "🧩 Leads Pipeline",
+    "💼 Ads Opportunities",
+    "📝 Proposals",
+    "📢 Ad Sales Inventory",
+    "📝 Agreements",
+    "💰 Billing & Reminders",
+    "📊 Reports",
+    "💬 WhatsApp",
+    # Assets/Inventory (read-only in Ads module) — page enforces access via can()
+    "🗂 Inventory (Sites)",
+    "📺 Screens",
 ]
-
 with st.sidebar:
     # Sidebar brand (kept compact to avoid duplicate-logo feel)
     if Path(LOGO_PATH).exists():
@@ -4640,16 +4696,29 @@ with st.sidebar:
             st.stop()
 
     allowed_sections = [SECTION_INSTALL, SECTION_ADS] if SCOPE == SCOPE_BOTH else [SCOPE]
-    SECTION = st.radio("Module", allowed_sections, horizontal=True)
+
+    # Role-based default module (UI-only)
+    _default_section = SECTION_INSTALL
+    if ROLE in [ROLE_ADS_MANAGER, ROLE_ADS_MARKETING, ROLE_ADS_FIELD, ROLE_VIEWER_ADS]:
+        _default_section = SECTION_ADS
+    if ROLE in [ROLE_INSTALLATION_MANAGER, ROLE_INSTALLATION_MARKETING, ROLE_INSTALLATION_FIELD, ROLE_VIEWER_INSTALLATION]:
+        _default_section = SECTION_INSTALL
+    if allowed_sections and _default_section not in allowed_sections:
+        _default_section = allowed_sections[0]
+
+    SECTION = st.radio(
+        "Module",
+        allowed_sections,
+        horizontal=True,
+        index=allowed_sections.index(_default_section) if _default_section in allowed_sections else 0,
+        format_func=lambda x: "Module-1: Installation" if x == SECTION_INSTALL else ("Module-2: Advertisements" if x == SECTION_ADS else str(x)),
+        key="sidebar_module",
+    )
 
     require_module_access(SECTION)
 
-    menu = MENU_INSTALL if SECTION == SECTION_INSTALL else MENU_ADS
-    if (ROLE == ROLE_SUPER_ADMIN) or (ADMIN_HEAD_ENABLED and ROLE == ROLE_MARKETING_HEAD):
-        menu = menu + ["Admin Panel"]
-    # UI-only: Dedicated Contacts page for quick calling/workflow
-    if "📇 Contacts" not in menu:
-        menu = menu + ["📇 Contacts"]
+    # Module-wise menu, filtered by role permissions (UI-only)
+    menu = build_menu_for(SECTION, ROLE)
 
     st.markdown("### 🔎 Global Search")
     gq = st.text_input(
@@ -7390,7 +7459,15 @@ if PAGE_KEY == "Contacts":
 
 
 if PAGE_KEY == "Home":
-    page_title("🏠 Home (Search & Call)", f"{SECTION}: Fast search with contact actions")
+    # =========================================================
+    # MODULE-SPECIFIC HOME (UI-only)
+    # - Module-1: Installation KPIs + pipeline + dues + service + map preview + quick search
+    # - Module-2: Ads KPIs + proposal funnel + billing + map preview + quick search
+    # =========================================================
+    if SECTION == SECTION_INSTALL:
+        page_title("🏠 Home — Installation", "Lead → Survey → Install → Active → Rent → Maintenance")
+    else:
+        page_title("🏠 Home — Advertisements", "Lead → Proposal → Booking → Campaign → Billing → Reports")
 
     # ---------------------------
     # Optional global search (across modules)
@@ -7412,37 +7489,152 @@ if PAGE_KEY == "Home":
                         data=df_to_csv_bytes(dfm),
                         file_name=f"{mod.replace(' ','_').lower()}_search.csv",
                         mime="text/csv",
+                        key=f"home_export_{mod}",
                     )
         if not any_hit:
             st.info("No results found in database modules for this search.")
         st.markdown("---")
 
     # ---------------------------
-    # Local search panel (District -> City -> Query)
+    # KPI strip (safe counts only; no logic changes)
+    # ---------------------------
+    def _safe_count(sql: str, params: dict | None = None) -> int:
+        try:
+            dfc = qdf(sql, params or {})
+            return int(len(dfc)) if dfc is not None else 0
+        except Exception:
+            return 0
+
+    def _safe_sum(sql: str, params: dict | None = None, col: str = "amount") -> float:
+        try:
+            dfs = qdf(sql, params or {})
+            if dfs is None or len(dfs) == 0 or col not in dfs.columns:
+                return 0.0
+            return float(pd.to_numeric(dfs[col], errors="coerce").fillna(0).sum())
+        except Exception:
+            return 0.0
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        kpi("Total Leads", f"{len(leads_df):,}")
+    with c2:
+        kpi("Interested", f"{int((leads_df['status'] == 'Interested').sum()):,}")
+    with c3:
+        if SECTION == SECTION_INSTALL:
+            sites = _safe_count("SELECT property_id FROM inventory_sites LIMIT 500000") if table_exists("inventory_sites") else 0
+            kpi("Installed Sites", f"{sites:,}")
+        else:
+            props = _safe_count("SELECT proposal_id FROM proposals WHERE section=:s", {"s": SECTION}) if table_exists("proposals") else 0
+            kpi("Proposals", f"{props:,}")
+    with c4:
+        if table_exists("payments"):
+            overdue = _safe_count(
+                "SELECT payment_id FROM payments WHERE section=:s AND status IN ('due','pending') AND COALESCE(due_date,'') <> '' AND due_date::date < CURRENT_DATE",
+                {"s": SECTION},
+            )
+            kpi("Overdue Payments", f"{overdue:,}")
+        else:
+            kpi("Overdue Payments", "—")
+
+    # ---------------------------
+    # Pipeline widgets (module-specific)
+    # ---------------------------
+    st.markdown("### 📍 Pipeline Snapshot")
+    if SECTION == SECTION_INSTALL:
+        # Lead → Survey → Active using available tables
+        p1, p2, p3, p4, p5 = st.columns(5)
+        with p1:
+            kpi("Leads (New)", f"{int((leads_df['status'] == 'New').sum()):,}")
+        with p2:
+            kpi("Contacted", f"{int((leads_df['status'] == 'Contacted').sum()):,}")
+        with p3:
+            surv = _safe_count("SELECT survey_id FROM surveys WHERE section=:s", {"s": SECTION}) if table_exists("surveys") else 0
+            kpi("Surveys", f"{surv:,}")
+        with p4:
+            ms = _safe_count("SELECT milestone_id FROM milestones WHERE section=:s", {"s": SECTION}) if table_exists("milestones") else 0
+            kpi("Milestones", f"{ms:,}")
+        with p5:
+            act = _safe_count("SELECT agreement_id FROM agreements WHERE section=:s", {"s": SECTION}) if table_exists("agreements") else 0
+            kpi("Agreements", f"{act:,}")
+
+        st.caption("Tip: Open **Property 360 (Install)** from the sidebar to manage Survey → Workorders → Milestones for an active property.")
+    else:
+        # Lead → Proposal using available table(s)
+        p1, p2, p3, p4, p5 = st.columns(5)
+        with p1:
+            kpi("Leads (New)", f"{int((leads_df['status'] == 'New').sum()):,}")
+        with p2:
+            kpi("Interested", f"{int((leads_df['status'] == 'Interested').sum()):,}")
+        with p3:
+            props = _safe_count("SELECT proposal_id FROM proposals WHERE section=:s", {"s": SECTION}) if table_exists("proposals") else 0
+            kpi("Proposals", f"{props:,}")
+        with p4:
+            inv = _safe_sum("SELECT amount FROM payments WHERE section=:s AND status IN ('due','pending')", {"s": SECTION}, col="amount") if table_exists("payments") else 0.0
+            kpi("Outstanding (₹)", f"{inv:,.0f}")
+        with p5:
+            kpi("Reports", "Open →")
+
+    # ---------------------------
+    # Dues / service / tickets panels (safe + non-breaking)
+    # ---------------------------
+    a, b = st.columns([1.2, 1])
+    with a:
+        st.markdown("### 💰 Dues / Overdues")
+        if table_exists("payments"):
+            pay = qdf(
+                """
+                SELECT payment_id, agreement_id, amount, due_date, status, notes
+                FROM payments
+                WHERE section = :s
+                ORDER BY COALESCE(due_date,'2999-12-31')::date ASC
+                LIMIT 50
+                """,
+                {"s": SECTION},
+            )
+            render_table_pro(pay, title="Upcoming / Overdue", hide_cols=infer_internal_cols(pay), date_cols=["due_date"], currency_cols=["amount"], page_size_default=25)
+        else:
+            st.info("Payments module not available (payments table missing).")
+
+    with b:
+        st.markdown("### 🗺 Map Preview")
+        st.caption("Open **Map View** for full filters, Active Property selection and Google Maps links.")
+        if st.button("Open Map View", type="primary", key="home_open_map"):
+            st.session_state["nav_page"] = "🗺 Map View"
+            st.rerun()
+
+        st.markdown("### 🛠 Service / Tickets")
+        if table_exists("screens"):
+            due_soon = _safe_count(
+                "SELECT screen_id FROM screens WHERE COALESCE(next_service_due,'') <> '' AND next_service_due::date <= (CURRENT_DATE + INTERVAL '14 day')",
+                {}
+            )
+            kpi("Service Due (14d)", f"{due_soon:,}")
+        else:
+            st.info("Service KPIs require **screens** table fields (next_service_due).")
+
+    st.markdown("---")
+
+    # ---------------------------
+    # Quick Search & Call (re-uses existing search panel / cards)
     # ---------------------------
     st.markdown('<div class="sticky-wrap">', unsafe_allow_html=True)
-    df_filtered = render_search_panel_leads(leads_df, key_prefix="home", title="🔎 District → City → Property (Search & Call)")
+    df_filtered = render_search_panel_leads(leads_df, key_prefix="home", title="🔎 Quick Search (District → City → Property)")
     st.markdown("</div>", unsafe_allow_html=True)
 
     view_mode = st.radio("View", ["Cards (Contacts)", "Table"], horizontal=True, index=0, key="home_view_mode")
 
     if not st.session_state.get("home_searched"):
-        st.info("Use the search panel above and click **Search**. You can then call/WhatsApp/email directly from results.")
+        st.info("Use the search panel above and click **Search** (press Enter works).")
     else:
         if view_mode.startswith("Cards"):
-            # Contact-first UI for calling
             allow_updates = bool(can(SECTION, "write", ROLE))
-            # plug-in update function only if your code has it
             update_fn = None
             if "upsert_lead_update" in globals():
                 def _upd(pid, status="New", notes="", follow_up="", last_call_outcome=None):
-                    # keep existing upsert signature if present
                     try:
                         upsert_lead_update(SECTION, pid, status=status, notes=notes, follow_up=follow_up, last_call_outcome=last_call_outcome)
                     except TypeError:
-                        # fallback older signature
                         upsert_lead_update(pid, status=status, notes=notes, follow_up=follow_up, last_call_outcome=last_call_outcome)
-
                 update_fn = _upd
 
             render_lead_contact_cards(
@@ -7455,21 +7647,25 @@ if PAGE_KEY == "Home":
                 role=ROLE,
             )
         else:
-            # Table mode (pro table with built-in pagination/search)
-            view_cols = [
-                "District", "City", "Property Name", "Property Address",
-                "Promoter / Developer Name", "Promoter Mobile Number", "Promoter Email",
-                "status", "assigned_to", "follow_up",
-            ]
-            dfv = safe_df_cols(df_filtered, view_cols)
+            dfv = safe_df_cols(
+                df_filtered,
+                [
+                    "District", "City", "Property Name", "Property Address",
+                    "Promoter / Developer Name", "Promoter Mobile Number", "Promoter Email",
+                    "status", "assigned_to", "follow_up",
+                ],
+            )
             render_table_pro(
                 dfv,
-                title="Leads (Search Results)",
+                title="Search Results",
                 hide_cols=infer_internal_cols(dfv),
                 date_cols=[c for c in ["follow_up", "last_updated"] if c in dfv.columns],
                 status_col="status" if "status" in dfv.columns else None,
                 page_size_default=50,
             )
+
+    st.stop()
+
 
 elif PAGE_KEY == "Management Dashboard":
 
@@ -8757,6 +8953,4 @@ else:
     st.info("This page is not implemented yet in this build.")
 
 
-# ---- Call the router ----
-render_page(PAGE_KEY)
-st.stop()
+# ---- Router call removed (pages are handled in the PAGE_KEY switch above) ----
