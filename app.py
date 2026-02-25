@@ -379,12 +379,13 @@ def main():
         return
     
     rt.PAGE_KEY = rt.page_key_from_label(page_label) if hasattr(rt, "page_key_from_label") else rt.strip_menu_emoji(page_label)
-    
-        # ---- Route to module router ----
-        if rt.SECTION == rt.SECTION_INSTALL:
-            route_install(rt.PAGE_KEY)
-        else:
-            route_ads(rt.PAGE_KEY)
-    
-    if __name__ == "__main__":
-        main()
+
+    # ---- Route to module router ----
+    if rt.SECTION == rt.SECTION_INSTALL:
+        route_install(rt.PAGE_KEY)
+    else:
+        route_ads(rt.PAGE_KEY)
+
+
+if __name__ == "__main__":
+    main()
