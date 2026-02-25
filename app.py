@@ -373,18 +373,18 @@ def main():
     # Convert menu label (with emoji) to PAGE_KEY (strip emoji prefix)
     # Legacy router expects PAGE_KEY like "Home", "Leads Pipeline", etc.
     
-# ---- New Workflow (Stages) page (does not affect existing routers) ----
-if page_label == "✅ Workflow (Stages)":
-    _render_workflow(rt.SECTION)
-    return
-
-rt.PAGE_KEY = rt.page_key_from_label(page_label) if hasattr(rt, "page_key_from_label") else rt.strip_menu_emoji(page_label)
-
-    # ---- Route to module router ----
-    if rt.SECTION == rt.SECTION_INSTALL:
-        route_install(rt.PAGE_KEY)
-    else:
-        route_ads(rt.PAGE_KEY)
-
-if __name__ == "__main__":
-    main()
+    # ---- New Workflow (Stages) page (does not affect existing routers) ----
+    if page_label == "✅ Workflow (Stages)":
+        _render_workflow(rt.SECTION)
+        return
+    
+    rt.PAGE_KEY = rt.page_key_from_label(page_label) if hasattr(rt, "page_key_from_label") else rt.strip_menu_emoji(page_label)
+    
+        # ---- Route to module router ----
+        if rt.SECTION == rt.SECTION_INSTALL:
+            route_install(rt.PAGE_KEY)
+        else:
+            route_ads(rt.PAGE_KEY)
+    
+    if __name__ == "__main__":
+        main()
